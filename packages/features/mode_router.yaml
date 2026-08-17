@@ -1,0 +1,36 @@
+# Local external components host the state machine and protocol logic.
+# YAML stays focused on wiring and composition.
+external_components:
+  - source:
+      type: local
+      path: my_components
+    components:
+      - ili9xxx
+      - onx_app_state
+      - onx_storage
+      - onx_mode_manager
+      - onx_ui
+
+# Shared runtime state for all future modes.
+onx_app_state:
+  id: app_state
+
+# Storage abstraction; future versions will back this with NVS/eFuse.
+onx_storage:
+  id: app_storage
+
+# Central mode router. It enters normal mode after runtime state is initialized.
+onx_mode_manager:
+  id: mode_manager
+  app_state_id: app_state
+  normal_wifi_ssid: ${wifi_ssid}
+  normal_wifi_password: ${wifi_password}
+  runtime_log_level: ${logger_level}
+
+# UI presenter/view-model layer. Keep display business logic centralized in C++
+# so YAML focuses on layout and bindings.
+onx_ui:
+  id: ui_presenter
+  app_state_id: app_state
+  storage_id: app_storage
+

@@ -1,0 +1,13 @@
+api:
+  id: api_server
+  homeassistant_states: true
+  on_client_connected:
+    then:
+      # Authentication completes before HA sends its state-subscription request,
+      # so this callback must not treat every API client as Home Assistant.
+      - script.execute: refresh_normal_ha_connection_state
+  on_client_disconnected:
+    then:
+      # The callback runs after the departing client has been removed. Recheck
+      # the remaining state-subscribing clients instead of forcing offline.
+      - script.execute: refresh_normal_ha_connection_state

@@ -1,0 +1,1598 @@
+binary_sensor:
+  - platform: gpio
+    id: key_btn
+    internal: true
+    pin:
+      number: GPIO9
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      - delayed_off: 5ms
+    on_press:
+      then:
+        - logger.log: "KEY press"
+        - lambda: |-
+            id(key_press_started_ms) = millis();
+            id(key_pressed) = true;
+            id(key_long_press_handled) = false;
+            id(detail_long_press_exit_fired) = false;
+            id(normal_clear_wifi_allowed) = true;
+            if (id(screen_off_state)) {
+              id(ha_screen_off).turn_off();
+              id(key_long_press_handled) = true;
+            }
+            if (!id(sleep_mode_state) && id(ui_presenter)->is_standby_active()) {
+              id(standby_wakeup_pending) = true;
+              id(standby_input_suppressed_until_ms) = millis() + 350;
+              id(key_long_press_handled) = true;
+            }
+        - lambda: |-
+            if (!id(key_long_press_handled) &&
+                !id(screen_off_state) &&
+                id(ui_presenter)->is_normal_mode_active() &&
+                !id(ui_presenter)->is_standby_active() &&
+                !(id(mode_manager)->is_provisioning_mode_enabled() || !id(normal_ha_added)) &&
+                id(normal_device_detail_active) &&
+                id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                id(normal_detail_light_mode_count) > 0 &&
+                id(normal_device_detail_online)) {
+              id(normal_detail_light_mode_adjusting) = false;
+              id(normal_detail_light_mode_rotated) = false;
+              id(normal_clear_wifi_allowed) = true;
+            }
+        - if:
+            condition:
+              lambda: |-
+                return !id(key_long_press_handled) &&
+                       !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !(id(mode_manager)->is_provisioning_mode_enabled() || !id(normal_ha_added)) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                       id(normal_detail_light_mode_count) > 0 &&
+                       id(normal_device_detail_online);
+            then:
+              - script.execute: refresh_normal_light_detail_page
+              - script.execute: enter_normal_light_detail_mode_switching
+        - lambda: |-
+            id(ui_presenter)->notify_user_activity();
+    on_release:
+      then:
+        - logger.log:
+            level: INFO
+            format: "KEY release"
+        - lambda: |-
+            if (id(sleep_mode_state)) {
+              id(sleep_wakeup_pending) = true;
+              id(standby_wakeup_pending) = false;
+              return;
+            }
+            if (id(standby_wakeup_pending)) {
+              id(exit_standby_mode).execute();
+              id(standby_wakeup_pending) = false;
+              return;
+            }
+            const uint32_t now = millis();
+            const uint32_t held_ms = now - id(key_press_started_ms);
+            ESP_LOGI("input", "KEY held for %u ms", static_cast<unsigned int>(held_ms));
+            if (now - id(key_last_release_ms) < 400) {
+              if (id(normal_device_detail_online)) {
+                if (id(screen_off_state)) {
+                  id(ha_screen_off).turn_off();
+                } else if (id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && id(normal_page_index) == 4 && id(ha_light_active)) {
+                  id(ha_light_selected_slider) = !id(ha_light_selected_slider);
+                }
+              }
+            }
+            id(key_last_release_ms) = now;
+            id(normal_clear_wifi_allowed) = true;
+            if (id(ui_presenter)->is_normal_mode_active() &&
+                !id(ui_presenter)->is_standby_active() &&
+                id(mode_manager)->is_provisioning_mode_enabled()) {
+              id(key_long_press_handled) = true;
+              return;
+            }
+            if (id(normal_device_detail_active) &&
+                id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT) {
+              if (id(normal_detail_light_mode_count) > 0) {
+                id(normal_detail_light_mode_adjusting) = false;
+                id(normal_detail_light_mode_rotated) = false;
+              }
+              id(refresh_normal_light_detail_page).execute();
+            }
+        - if:
+            condition:
+              lambda: |-
+                return !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !id(detail_long_press_exit_fired) &&
+                       (!id(key_long_press_handled) || id(normal_device_detail_curtain_adjust_active)) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN &&
+                       (id(normal_device_detail_online) || (millis() - id(key_press_started_ms)) >= 688);
+            then:
+              - if:
+                  condition:
+                    lambda: |-
+                      return id(normal_device_detail_online) &&
+                             id(normal_device_detail_curtain_adjust_active);
+                  then:
+                    - lambda: |-
+                        int detail_index = id(normal_device_detail_index);
+                        if (detail_index < 0) detail_index = 0;
+                        if (detail_index > 9) detail_index = 9;
+                        const int target_position = std::clamp(id(normal_device_detail_curtain_target_position), 0, 100);
+                        id(normal_device_detail_curtain_adjust_active) = false;
+                        id(normal_device_detail_curtain_adjust_pending) = false;
+                        id(detail_long_press_exit_fired) = true;
+                        id(key_long_press_handled) = true;
+                        ESP_LOGI("input", "curtain detail position adjust commit: index=%d target_position=%d", detail_index, target_position);
+                    - script.execute: commit_normal_curtain_position_detail
+                    - script.execute: refresh_normal_curtain_detail_page
+                    - lambda: |-
+                        id(ui_presenter)->notify_user_activity();
+                  else:
+                    - if:
+                        condition:
+                          lambda: |-
+                            return (millis() - id(key_press_started_ms)) >= 688;
+                        then:
+                          - script.execute: exit_normal_switch_detail
+                          - lambda: |-
+                              id(detail_long_press_exit_fired) = true;
+                              id(key_long_press_handled) = true;
+                              id(ui_presenter)->notify_user_activity();
+                        else:
+                          - lambda: |-
+                              int detail_index = id(normal_device_detail_index);
+                              if (detail_index < 0) detail_index = 0;
+                              if (detail_index > 9) detail_index = 9;
+                              const int feedback_position = std::clamp(id(normal_device_detail_curtain_feedback_position), 0, 100);
+                              const uint32_t curtain_state_code = id(app_storage)->get_normal_ui_device_extra_u32(detail_index, 2);
+                              const int preset_position = std::clamp((int) id(app_storage)->get_normal_ui_device_extra_u32(detail_index, 3), 0, 100);
+                              const bool is_moving = curtain_state_code == 3 || curtain_state_code == 4;
+                              const bool is_at_open = feedback_position == 0;
+                              const bool is_at_closed = feedback_position == 100;
+                              const int target_position = is_moving
+                                                              ? feedback_position
+                                                              : (is_at_open ? 100 : (is_at_closed ? 0 : preset_position));
+                              id(normal_device_detail_curtain_target_position) = target_position;
+                              std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(detail_index);
+                              ESP_LOGI("input", "curtain detail short press: pause/stop, held_ms=%u, index=%d, entity_id=%s",
+                                       static_cast<unsigned int>(millis() - id(key_press_started_ms)),
+                                       detail_index,
+                                       entity_id.c_str());
+                              if (entity_id.empty()) {
+                                ESP_LOGW("input", "curtain detail pause skipped: empty entity_id");
+                              }
+                              ESP_LOGI("input", "curtain detail short press action=%s target_position=%d state_code=%u feedback_position=%d",
+                                       is_moving ? "stop" : "set", id(normal_device_detail_curtain_target_position),
+                                       static_cast<unsigned int>(curtain_state_code), feedback_position);
+                              if (!is_moving && is_at_open) {
+                                ESP_LOGI("input", "curtain detail short press edge override: open -> close");
+                              } else if (!is_moving && is_at_closed) {
+                                ESP_LOGI("input", "curtain detail short press edge override: closed -> open");
+                              }
+                          - if:
+                              condition:
+                                lambda: |-
+                                  int detail_index = id(normal_device_detail_index);
+                                  if (detail_index < 0) detail_index = 0;
+                                  if (detail_index > 9) detail_index = 9;
+                                  return !id(ui_presenter)->get_normal_device_entity_id(detail_index).empty();
+                              then:
+                                - if:
+                                    condition:
+                                      lambda: |-
+                                        int detail_index = id(normal_device_detail_index);
+                                        if (detail_index < 0) detail_index = 0;
+                                        if (detail_index > 9) detail_index = 9;
+                                        const uint32_t curtain_state_code = id(app_storage)->get_normal_ui_device_extra_u32(detail_index, 2);
+                                        return curtain_state_code == 3 || curtain_state_code == 4;
+                                    then:
+                                      - homeassistant.service:
+                                          service: cover.stop_cover
+                                          data_template:
+                                            entity_id: "{{ target_entity_id }}"
+                                          variables:
+                                            target_entity_id: !lambda |-
+                                              int detail_index = id(normal_device_detail_index);
+                                              if (detail_index < 0) detail_index = 0;
+                                              if (detail_index > 9) detail_index = 9;
+                                              return id(ui_presenter)->get_normal_device_entity_id(detail_index);
+                                    else:
+                                      - homeassistant.service:
+                                          service: cover.set_cover_position
+                                          data_template:
+                                            entity_id: "{{ target_entity_id }}"
+                                            position: "{{ target_position }}"
+                                          variables:
+                                            target_entity_id: !lambda |-
+                                              int detail_index = id(normal_device_detail_index);
+                                              if (detail_index < 0) detail_index = 0;
+                                              if (detail_index > 9) detail_index = 9;
+                                              return id(ui_presenter)->get_normal_device_entity_id(detail_index);
+                                            target_position: !lambda |-
+                                              int detail_index = id(normal_device_detail_index);
+                                              if (detail_index < 0) detail_index = 0;
+                                              if (detail_index > 9) detail_index = 9;
+                                              const int feedback_position = std::clamp(id(normal_device_detail_curtain_feedback_position), 0, 100);
+                                              const uint32_t curtain_state_code = id(app_storage)->get_normal_ui_device_extra_u32(detail_index, 2);
+                                              const int preset_position = std::clamp((int) id(app_storage)->get_normal_ui_device_extra_u32(detail_index, 3), 0, 100);
+                                              const bool is_moving = curtain_state_code == 3 || curtain_state_code == 4;
+                                              if (is_moving) {
+                                                return feedback_position;
+                                              }
+                                              if (feedback_position == 0) {
+                                                return 100;
+                                              }
+                                              if (feedback_position == 100) {
+                                                return 0;
+                                              }
+                                              return preset_position;
+                          - lambda: |-
+                              id(key_long_press_handled) = true;
+                              id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !id(key_long_press_handled) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_online) &&
+                       (id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SWITCH ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_PLUG ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_AUTOMATION);
+            then:
+              - lambda: |-
+                  const uint32_t held_ms = millis() - id(key_press_started_ms);
+                  const int kind = id(normal_device_detail_kind);
+                  if (kind == NORMAL_DEVICE_DETAIL_KIND_SWITCH || kind == NORMAL_DEVICE_DETAIL_KIND_PLUG) {
+                    if (held_ms < 688) {
+                      id(emit_normal_switch_control_event).execute();
+                    } else {
+                      id(normal_detail_exit_switch_ready) = true;
+                      id(normal_detail_exit_light_ready) = false;
+                    }
+                  } else if (kind == NORMAL_DEVICE_DETAIL_KIND_AUTOMATION) {
+                    if (held_ms < 688) {
+                      id(emit_normal_automation_control_event).execute(id(normal_device_detail_index));
+                    } else {
+                      id(normal_detail_exit_switch_ready) = true;
+                      id(normal_detail_exit_light_ready) = false;
+                    }
+                  } else if (kind == NORMAL_DEVICE_DETAIL_KIND_LIGHT) {
+                    const bool has_adjustable_light_mode = id(normal_detail_light_mode_count) > 0;
+                    if (held_ms < 300 || (held_ms < 688 && !has_adjustable_light_mode)) {
+                      id(emit_normal_switch_control_event).execute();
+                    } else if (held_ms < 688) {
+                      id(normal_detail_light_mode_adjusting) = false;
+                      id(normal_clear_wifi_allowed) = true;
+                    } else {
+                      id(normal_detail_exit_light_ready) = true;
+                      id(normal_detail_exit_switch_ready) = false;
+                    }
+                  }
+              - script.execute: can_exit_normal_detail
+              - if:
+                  condition:
+                    lambda: |-
+                      return id(normal_detail_exit_allowed);
+                  then:
+                    - script.execute: exit_normal_switch_detail
+                    - lambda: |-
+                        id(detail_long_press_exit_fired) = true;
+                        id(key_long_press_handled) = true;
+                        id(ui_presenter)->notify_user_activity();
+                  else:
+                    - lambda: |-
+                        id(key_long_press_handled) = true;
+                        id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !id(key_long_press_handled) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS;
+            then:
+              - if:
+                  condition:
+                    lambda: |-
+                      const uint32_t held_ms = millis() - id(key_press_started_ms);
+                      if (held_ms >= 688) {
+                        id(normal_detail_exit_settings_ready) = true;
+                        id(normal_detail_exit_switch_ready) = false;
+                        id(normal_detail_exit_light_ready) = false;
+                        return true;
+                      }
+                      id(normal_detail_exit_settings_ready) = false;
+                      return false;
+                  then:
+                    - script.execute: can_exit_normal_detail
+                    - if:
+                        condition:
+                          lambda: |-
+                            return id(normal_detail_exit_allowed);
+                        then:
+                          - script.execute: exit_normal_switch_detail
+                          - lambda: |-
+                              id(detail_long_press_exit_fired) = true;
+                              id(key_long_press_handled) = true;
+                              id(ui_presenter)->notify_user_activity();
+                        else:
+                          - lambda: |-
+                              ESP_LOGW("input", "settings brightness detail exit denied");
+                  else:
+                    - script.execute: exit_normal_settings_brightness_detail
+              - lambda: |-
+                  id(key_long_press_handled) = true;
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !id(key_long_press_handled) &&
+                       id(normal_device_detail_active) &&
+                       (id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL || id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL_QR_CODE);
+            then:
+              - if:
+                  condition:
+                    lambda: |-
+                      const uint32_t held_ms = millis() - id(key_press_started_ms);
+                      if (held_ms >= 688) {
+                        id(normal_detail_exit_settings_ready) = true;
+                        id(normal_detail_exit_switch_ready) = false;
+                        id(normal_detail_exit_light_ready) = false;
+                        return true;
+                      }
+                      id(normal_detail_exit_settings_ready) = false;
+                      return false;
+                  then:
+                    - script.execute: can_exit_normal_detail
+                    - if:
+                        condition:
+                          lambda: |-
+                            return id(normal_detail_exit_allowed);
+                        then:
+                          - script.execute: exit_normal_switch_detail
+                          - lambda: |-
+                              id(detail_long_press_exit_fired) = true;
+                              id(key_long_press_handled) = true;
+                              id(ui_presenter)->notify_user_activity();
+                        else:
+                          - lambda: |-
+                              ESP_LOGW("input", "settings user manual exit denied");
+                  else:
+                    - if:
+                        condition:
+                          lambda: |-
+                            return id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL_QR_CODE;
+                        then:
+                          - script.execute: exit_normal_settings_user_manual_qrcode
+                        else:
+                          - script.execute: exit_normal_settings_user_manual
+              - lambda: |-
+                  id(key_long_press_handled) = true;
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !id(key_long_press_handled) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB;
+            then:
+              - if:
+                  condition:
+                    lambda: |-
+                      const uint32_t held_ms = millis() - id(key_press_started_ms);
+                      if (held_ms >= 688) {
+                        id(normal_detail_exit_settings_ready) = true;
+                        id(normal_detail_exit_switch_ready) = false;
+                        id(normal_detail_exit_light_ready) = false;
+                        return true;
+                      }
+                      id(normal_detail_exit_settings_ready) = false;
+                      return false;
+                  then:
+                    - script.execute: can_exit_normal_detail
+                    - if:
+                        condition:
+                          lambda: |-
+                            return id(normal_detail_exit_allowed);
+                        then:
+                          - script.execute: exit_normal_switch_detail
+                          - lambda: |-
+                              id(detail_long_press_exit_fired) = true;
+                              id(key_long_press_handled) = true;
+                              id(ui_presenter)->notify_user_activity();
+                        else:
+                          - lambda: |-
+                              ESP_LOGW("input", "settings knob detail exit denied");
+                  else:
+                    - script.execute: apply_normal_settings_knob_detail
+              - lambda: |-
+                  id(key_long_press_handled) = true;
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !id(key_long_press_handled) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_WIFI;
+            then:
+              - if:
+                  condition:
+                    lambda: |-
+                      const uint32_t held_ms = millis() - id(key_press_started_ms);
+                      if (held_ms >= 688) {
+                        id(normal_detail_exit_settings_ready) = true;
+                        id(normal_detail_exit_switch_ready) = false;
+                        id(normal_detail_exit_light_ready) = false;
+                        return true;
+                      }
+                      id(normal_detail_exit_settings_ready) = false;
+                      return false;
+                  then:
+                    - script.execute: can_exit_normal_detail
+                    - if:
+                        condition:
+                          lambda: |-
+                            return id(normal_detail_exit_allowed);
+                        then:
+                          - script.execute: exit_normal_switch_detail
+                          - lambda: |-
+                              id(detail_long_press_exit_fired) = true;
+                              id(key_long_press_handled) = true;
+                              id(ui_presenter)->notify_user_activity();
+                        else:
+                          - lambda: |-
+                              ESP_LOGW("input", "settings wifi detail exit denied");
+                  else:
+                    - script.execute: exit_normal_settings_wifi_detail
+              - lambda: |-
+                  id(key_long_press_handled) = true;
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !id(key_long_press_handled) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS;
+            then:
+              - if:
+                  condition:
+                    lambda: |-
+                      const uint32_t held_ms = millis() - id(key_press_started_ms);
+                      if (held_ms >= 688) {
+                        id(normal_detail_exit_settings_ready) = true;
+                        id(normal_detail_exit_switch_ready) = false;
+                        id(normal_detail_exit_light_ready) = false;
+                        return true;
+                      }
+                      id(normal_detail_exit_settings_ready) = false;
+                      const int selected = id(normal_settings_selected_index);
+                      return selected >= 0 && selected <= 4;
+                  then:
+                    - if:
+                        condition:
+                          lambda: |-
+                            return id(normal_detail_exit_settings_ready);
+                        then:
+                          - script.execute: can_exit_normal_detail
+                          - if:
+                              condition:
+                                lambda: |-
+                                  return id(normal_detail_exit_allowed);
+                              then:
+                                - script.execute: exit_normal_switch_detail
+                                - lambda: |-
+                                    id(detail_long_press_exit_fired) = true;
+                                    id(key_long_press_handled) = true;
+                                    id(ui_presenter)->notify_user_activity();
+                              else:
+                                - lambda: |-
+                                    ESP_LOGW("input", "settings detail exit denied");
+                        else:
+                          - if:
+                              condition:
+                                lambda: |-
+                                  return id(normal_settings_selected_index) == 0;
+                              then:
+                                - script.execute: enter_normal_settings_user_manual
+                              else:
+                                - if:
+                                    condition:
+                                      lambda: |-
+                                        return id(normal_settings_selected_index) == 1;
+                                    then:
+                                      - script.execute: enter_normal_settings_user_manual_qrcode
+                                    else:
+                                      - if:
+                                          condition:
+                                            lambda: |-
+                                              return id(normal_settings_selected_index) == 2;
+                                          then:
+                                            - script.execute: enter_normal_settings_wifi_detail
+                                          else:
+                                            - if:
+                                                condition:
+                                                  lambda: |-
+                                                    return id(normal_settings_selected_index) == 3;
+                                                then:
+                                                  - script.execute: enter_normal_settings_brightness_detail
+                                                else:
+                                                  - script.execute: enter_normal_settings_knob_detail
+                  else:
+                    - lambda: |-
+                        ESP_LOGI("input", "settings detail short press ignored");
+              - lambda: |-
+                  id(key_long_press_handled) = true;
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !id(key_long_press_handled) &&
+                       id(normal_page_index) == 0;
+            then:
+              - if:
+                  condition:
+                    lambda: |-
+                      int total = id(normal_device_count);
+                      if (total < 0) total = 0;
+                      if (total > 10) total = 10;
+                      const int settings_index = total == 0 ? (id(normal_ha_added) ? 1 : 2) : total;
+                      int selected = id(normal_device_selected_index);
+                      if (selected < 0) selected = 0;
+                      if (selected == settings_index) {
+                        return true;
+                      }
+                      if (total == 0) {
+                        return false;
+                      }
+                      if (selected > total) selected = total - 1;
+                      std::string device_type = "";
+                      switch (selected) {
+                        case 0: device_type = id(ui_presenter)->get_normal_device_type(0); break;
+                        case 1: device_type = id(ui_presenter)->get_normal_device_type(1); break;
+                        case 2: device_type = id(ui_presenter)->get_normal_device_type(2); break;
+                        case 3: device_type = id(ui_presenter)->get_normal_device_type(3); break;
+                        case 4: device_type = id(ui_presenter)->get_normal_device_type(4); break;
+                        case 5: device_type = id(ui_presenter)->get_normal_device_type(5); break;
+                        case 6: device_type = id(ui_presenter)->get_normal_device_type(6); break;
+                        case 7: device_type = id(ui_presenter)->get_normal_device_type(7); break;
+                        case 8: device_type = id(ui_presenter)->get_normal_device_type(8); break;
+                        default: device_type = id(ui_presenter)->get_normal_device_type(9); break;
+                        }
+                      for (char &c : device_type) {
+                        if (c >= 'A' && c <= 'Z') {
+                          c = c - 'A' + 'a';
+                        }
+                      }
+                      return device_type == "switch" || device_type == "plug" ||
+                             device_type == "light" || device_type == "curtain" ||
+                             device_type == "cover" || device_type == "chazuo" || device_type == "liang" ||
+                             device_type == "dimming_light" || device_type == "dimmable_light" ||
+                             device_type == "dimming" || device_type == "automation";
+                  then:
+                    - script.execute: enter_normal_switch_detail
+                    - lambda: |-
+                        id(key_long_press_handled) = true;
+                        id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return !id(screen_off_state) &&
+                       id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       !id(key_long_press_handled) &&
+                       id(normal_page_index) == 4 &&
+                       !id(ha_light_active) &&
+                       (millis() - id(key_press_started_ms) < 1000);
+            then:
+              - lambda: |-
+                  id(ha_light_active) = true;
+        - if:
+            condition:
+              lambda: |-
+                return id(sleep_wakeup_pending);
+            then:
+              - script.execute: exit_sleep_mode
+        - lambda: |-
+            id(key_pressed) = false;
+        - lambda: |-
+            id(ui_presenter)->notify_user_activity();
+
+  - platform: gpio
+    id: boot_btn
+    internal: true
+    pin:
+      number: GPIO0
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      - delayed_off: 5ms
+    on_press:
+      then:
+        - logger.log:
+            level: INFO
+            format: "BOOT press"
+        - lambda: |-
+            id(ui_presenter)->notify_user_activity();
+
+interval:
+  - interval: 20ms
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(key_btn).state &&
+                     !id(sleep_mode_state) &&
+                     !id(standby_wakeup_pending) &&
+                     id(ui_presenter)->is_normal_mode_active() &&
+                     id(normal_clear_wifi_allowed) &&
+                     (!id(normal_device_detail_active) || id(normal_device_detail_online)) &&
+                     (millis() - id(key_press_started_ms) >= 10000);
+          then:
+            - lambda: |-
+                ESP_LOGW("input", "KEY long press reached 10s in normal mode, clearing normal mode config and rebooting");
+                if (wifi::global_wifi_component != nullptr) {
+                  wifi::global_wifi_component->clear_sta();
+                  id(mode_manager)->clear_saved_normal_wifi_prefs_();
+                }
+                reset_normal_mode_preferences();
+                id(ha_host).publish_state("homeassistant.local");
+                id(standby_timeout_seconds).publish_state(300);
+                id(device1_type).publish_state("Switch");
+                id(device2_type).publish_state("Switch");
+                id(device3_type).publish_state("Switch");
+                id(device4_type).publish_state("Switch");
+                id(device5_type).publish_state("Switch");
+                id(device6_type).publish_state("Switch");
+                id(device7_type).publish_state("Switch");
+                id(device8_type).publish_state("Switch");
+                id(device9_type).publish_state("Switch");
+                id(device10_type).publish_state("Switch");
+                id(normal_brightness_value) = 100;
+                id(normal_knob_applied_value) = 2;
+                id(normal_knob_pending_value) = 2;
+                id(normal_ha_added) = false;
+                id(normal_ha_api_connected) = false;
+                App.safe_reboot();
+      - if:
+          condition:
+            lambda: |-
+              return !id(screen_off_state) &&
+                     id(key_btn).state &&
+                     id(ui_presenter)->is_normal_mode_active() &&
+                     !id(ui_presenter)->is_standby_active() &&
+                     !id(detail_long_press_exit_fired) &&
+                     !id(key_long_press_handled) &&
+                       id(normal_device_detail_active) &&
+                       (id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SWITCH ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_PLUG ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_WIFI ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL_QR_CODE ||
+                        id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_AUTOMATION) &&
+                     !(id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN && id(normal_device_detail_curtain_adjust_active)) &&
+                     (millis() - id(key_press_started_ms) < 10000);
+          then:
+            - script.execute: update_normal_detail_exit_ready_flags
+            - script.execute: can_exit_normal_detail
+            - if:
+                condition:
+                  lambda: |-
+                      return id(normal_detail_exit_allowed);
+                then:
+                  - script.execute: exit_normal_switch_detail
+                  - lambda: |-
+                      id(detail_long_press_exit_fired) = true;
+                      id(key_long_press_handled) = true;
+                      id(ui_presenter)->notify_user_activity();
+      - if:
+          condition:
+            lambda: |-
+              return !id(screen_off_state) &&
+                     id(key_btn).state &&
+                     id(ui_presenter)->is_normal_mode_active() &&
+                     !id(ui_presenter)->is_standby_active() &&
+                     id(normal_page_index) == 4 &&
+                     id(ha_light_active) &&
+                     !id(key_long_press_handled) &&
+                     (millis() - id(key_press_started_ms) >= 1000);
+          then:
+            - lambda: |-
+                id(ha_light_active) = false;
+                id(key_long_press_handled) = true;
+                id(ui_presenter)->notify_user_activity();
+
+sensor:
+  - platform: rotary_encoder
+    id: knob_enc
+    internal: true
+    pin_a:
+      number: GPIO48
+      mode:
+        input: true
+        pullup: true
+    pin_b:
+      number: GPIO47
+      mode:
+        input: true
+        pullup: true
+    resolution: ${encoder_resolution}
+    on_clockwise:
+      then:
+        - lambda: |-
+            int threshold = id(normal_knob_applied_value);
+            if (threshold != 1 && threshold != 2 && threshold != 4) {
+              threshold = 1;
+            }
+            id(normal_knob_cw_accumulator) = 0;
+            id(normal_knob_ccw_accumulator)++;
+            if (id(normal_knob_ccw_accumulator) >= threshold) {
+              id(normal_knob_ccw_accumulator) = 0;
+              id(normal_knob_event_pass) = true;
+            } else {
+              id(normal_knob_event_pass) = false;
+            }
+        - if:
+            condition:
+              lambda: |-
+                if (!id(sleep_mode_state) && id(ui_presenter)->is_standby_active()) {
+                  id(standby_wakeup_pending) = true;
+                  id(standby_input_suppressed_until_ms) = millis() + 350;
+                }
+                return id(sleep_mode_state);
+            then:
+              - lambda: |-
+                  id(sleep_wakeup_pending) = true;
+        - if:
+            condition:
+              lambda: |-
+                return id(screen_off_state);
+            then:
+              - switch.turn_off: ha_screen_off
+        - lambda: |-
+            if (millis() < id(standby_input_suppressed_until_ms)) {
+              id(normal_knob_event_pass) = false;
+            }
+        - if:
+            condition:
+              lambda: |-
+                return id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       id(mode_manager)->is_provisioning_mode_enabled();
+            then:
+              - lambda: |-
+                  id(normal_knob_event_pass) = false;
+        - if:
+            condition:
+              lambda: |-
+                int total = id(normal_device_count);
+                if (total < 0) total = 0;
+                if (total > 10) total = 10;
+                const int last_selectable = total == 0 ? (id(normal_ha_added) ? 1 : 2) : total;
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_page_index) == 0 && id(normal_device_selected_index) < last_selectable;
+            then:
+              - lambda: |-
+                  id(normal_device_selected_index)++;
+              - script.execute:
+                  id: show_normal_device_entry_page
+                  direction: 1
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS;
+            then:
+              - lambda: |-
+                  if (id(normal_settings_selected_index) < 4) {
+                    id(normal_settings_selected_index)++;
+                  }
+                  ESP_LOGI("input", "settings detail select: %d", id(normal_settings_selected_index));
+              - script.execute: refresh_normal_settings_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN &&
+                       id(normal_device_detail_online) &&
+                       !id(key_btn).state;
+            then:
+              - lambda: |-
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  id(normal_device_detail_curtain_target_position) = 100;
+                  ESP_LOGI("input", "curtain detail clockwise: target_position=%d", id(normal_device_detail_curtain_target_position));
+                  id(key_long_press_handled) = true;
+                  id(ui_presenter)->notify_user_activity();
+              - script.execute: refresh_normal_curtain_detail_page
+              - homeassistant.service:
+                  service: cover.set_cover_position
+                  data_template:
+                    entity_id: "{{ target_entity_id }}"
+                    position: "100"
+                  variables:
+                    target_entity_id: !lambda |-
+                      int detail_index = id(normal_device_detail_index);
+                      if (detail_index < 0) detail_index = 0;
+                      if (detail_index > 9) detail_index = 9;
+                      return id(ui_presenter)->get_normal_device_entity_id(detail_index);
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN &&
+                       id(normal_device_detail_online) &&
+                       id(key_btn).state &&
+                       (millis() - id(key_press_started_ms) < 610) &&
+                       !id(normal_device_detail_curtain_adjust_active);
+            then:
+              - lambda: |-
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  const int feedback_position = std::clamp((int) id(app_storage)->get_normal_ui_device_position(detail_index), 0, 100);
+                  id(normal_device_detail_curtain_feedback_position) = feedback_position;
+                  id(normal_device_detail_curtain_target_position) = feedback_position;
+                  id(normal_device_detail_curtain_adjust_active) = true;
+                  id(normal_device_detail_curtain_adjust_pending) = true;
+                  id(normal_clear_wifi_allowed) = false;
+                  id(key_long_press_handled) = true;
+                  int target_position = id(normal_device_detail_curtain_target_position) + 1;
+                  if (target_position > 100) target_position = 100;
+                  id(normal_device_detail_curtain_target_position) = target_position;
+                  ESP_LOGI("input", "curtain detail position adjust entered cw: feedback=%d target=%d", feedback_position, target_position);
+              - script.execute: refresh_normal_curtain_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                        id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN &&
+                       id(normal_device_detail_online) &&
+                       id(normal_device_detail_curtain_adjust_active) &&
+                       !id(normal_device_detail_curtain_adjust_pending) &&
+                       id(key_btn).state;
+            then:
+              - lambda: |-
+                  int target_position = id(normal_device_detail_curtain_target_position) + 1;
+                  if (target_position > 100) target_position = 100;
+                  id(normal_device_detail_curtain_target_position) = target_position;
+                  id(key_long_press_handled) = true;
+                  id(normal_clear_wifi_allowed) = false;
+                  ESP_LOGI("input", "curtain detail position adjust cw: target=%d", target_position);
+              - script.execute: refresh_normal_curtain_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                       id(normal_device_detail_online) &&
+                       id(normal_detail_light_mode_count) > 0 &&
+                       id(key_btn).state &&
+                       (millis() - id(key_press_started_ms) >= 300);
+            then:
+              - lambda: |-
+                  id(normal_detail_light_mode_rotated) = true;
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  auto light_state = id(app_storage)->normal_device_slot(detail_index).light();
+                  auto is_mode_enabled = [&](int mode) -> bool {
+                    if (mode == 0) return light_state.custom_supports_brightness();
+                    if (mode == 1) return light_state.custom_supports_color_temperature();
+                    if (mode == 2) return light_state.custom_supports_rgb();
+                    return false;
+                  };
+                  for (int candidate = id(normal_detail_light_mode) + 1; candidate < 3; ++candidate) {
+                    if (is_mode_enabled(candidate)) {
+                      id(normal_detail_light_mode) = candidate;
+                      break;
+                    }
+                  }
+                  id(normal_clear_wifi_allowed) = false;
+                  id(key_long_press_handled) = true;
+                  ESP_LOGI("input", "light detail mode adjusted: %d", id(normal_detail_light_mode));
+              - script.execute: refresh_normal_light_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                       id(normal_device_detail_online) &&
+                       id(normal_detail_light_mode) == 1 &&
+                       !id(key_btn).state &&
+                       id(app_storage)->normal_device_slot(id(normal_device_detail_index)).light().custom_supports_color_temperature();
+            then:
+              - lambda: |-
+                  int cct_value_pct = id(normal_light_cct_value_pct);
+                  if (cct_value_pct < 0) cct_value_pct = 0;
+                  if (cct_value_pct > 10) cct_value_pct = 10;
+                  cct_value_pct += 1;
+                  if (cct_value_pct > 10) cct_value_pct = 10;
+                  id(normal_light_cct_value_pct) = cct_value_pct;
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  auto detail_slot = id(app_storage)->normal_device_slot(detail_index);
+                  auto light_state = detail_slot.light();
+                  int cct_min_kelvin = (int) light_state.min_color_temperature_kelvin;
+                  int cct_max_kelvin = (int) light_state.max_color_temperature_kelvin;
+                  const bool has_cct_range = cct_min_kelvin > 0 && cct_max_kelvin > 0;
+                  if (!has_cct_range) {
+                    ESP_LOGW("input", "light detail CCT feedback failed: missing color temp range for index=%d", detail_index);
+                    return;
+                  }
+                  const uint16_t color_temperature = light_state.kelvin_from_color_temperature_step(cct_value_pct);
+                  esphome::onx_storage::NormalLightStatePatch patch{};
+                  patch.has_power = true;
+                  patch.is_on = true;
+                  patch.has_color_temperature_kelvin = true;
+                  patch.color_temperature_kelvin = color_temperature;
+                  if (!detail_slot.update_light(patch)) {
+                    ESP_LOGW("input", "light detail CCT feedback failed: unable to persist state for index=%d", detail_index);
+                    return;
+                  }
+                  id(normal_device_detail_is_on) = true;
+                  id(hmi_switch_state) = true;
+                  ESP_LOGI("input", "light detail CCT knob cw: target_kelvin=%u", static_cast<unsigned int>(color_temperature));
+                  id(refresh_normal_light_detail_page).execute();
+                  id(emit_normal_cct_light_event).execute(detail_index, static_cast<int>(color_temperature));
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                       id(normal_device_detail_online) &&
+                       id(normal_detail_light_mode) == 2 &&
+                       !id(key_btn).state &&
+                       id(app_storage)->normal_device_slot(id(normal_device_detail_index)).light().custom_supports_rgb();
+            then:
+              - lambda: |-
+                  int rgb_value_pct = id(normal_light_rgb_value_pct);
+                  if (rgb_value_pct < 0) rgb_value_pct = 0;
+                  if (rgb_value_pct > 35) rgb_value_pct = 35;
+                  rgb_value_pct += 1;
+                  if (rgb_value_pct > 35) rgb_value_pct = 0;
+                  id(normal_light_rgb_value_pct) = rgb_value_pct;
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  auto detail_slot = id(app_storage)->normal_device_slot(detail_index);
+                  esphome::onx_storage::NormalLightStatePatch patch{};
+                  patch.has_power = true;
+                  patch.is_on = true;
+                  patch.has_rgb_tick = true;
+                  patch.rgb_tick = static_cast<uint8_t>(rgb_value_pct);
+                  if (!detail_slot.update_light(patch)) {
+                    ESP_LOGW("input", "light detail RGB feedback failed: unable to persist power state for index=%d", detail_index);
+                    return;
+                  }
+                  id(normal_device_detail_is_on) = true;
+                  id(hmi_switch_state) = true;
+                  int hue = (rgb_value_pct * 10) % 360;
+                  ESP_LOGI("input", "light detail RGB knob cw: target_hue=%d saturation=100", hue);
+                  id(refresh_normal_light_detail_page).execute();
+                  id(emit_normal_rgb_light_event).execute(detail_index, rgb_value_pct);
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                       id(normal_device_detail_online) &&
+                       id(normal_detail_light_mode) == 0 &&
+                       !id(key_btn).state &&
+                       id(app_storage)->normal_device_slot(id(normal_device_detail_index)).light().custom_supports_brightness();
+            then:
+              - lambda: |-
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  auto detail_slot = id(app_storage)->normal_device_slot(detail_index);
+                  int brightness = (int) detail_slot.light().brightness_pct;
+                  if (brightness < 0) brightness = 0;
+                  if (brightness > 100) brightness = 100;
+                  brightness += 1;
+                  if (brightness > 100) brightness = 100;
+                  const bool new_on = brightness > 0;
+                  esphome::onx_storage::NormalLightStatePatch patch{};
+                  patch.has_power = true;
+                  patch.is_on = new_on;
+                  patch.has_brightness_pct = true;
+                  patch.brightness_pct = static_cast<uint8_t>(brightness);
+                  if (!detail_slot.update_light(patch)) {
+                    ESP_LOGW("input", "dimming light feedback failed: unable to persist state for index=%d", detail_index);
+                    return;
+                  }
+                  id(refresh_normal_light_detail_page).execute();
+                  id(emit_normal_dimming_light_event).execute(detail_index, brightness, new_on);
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS;
+            then:
+              - lambda: |-
+                  int pct = id(normal_brightness_value);
+                  if (pct < 10) pct = 10;
+                  if (pct > 100) pct = 100;
+                  pct += 10;
+                  if (pct > 100) pct = 100;
+                  id(normal_brightness_value) = pct;
+                  float current = 0.0f;
+                  id(lcd_backlight)->current_values_as_brightness(&current);
+                  ESP_LOGI("input", "display brightness knob anti-cw: current=%.3f target_pct=%d", current, pct);
+                        auto call = id(lcd_backlight)->make_call();
+                        call.set_brightness((float)pct / 100.0f);
+                        call.set_state(true);
+                        call.perform();
+                  id(screen_off_state) = false;
+                  id(ha_display_light_syncing) = true;
+                  auto ha_call = id(ha_light)->make_call();
+                  ha_call.set_state(true);
+                  ha_call.set_brightness((float)pct / 100.0f);
+                  ha_call.perform();
+                  id(ha_display_light_syncing) = false;
+              - script.execute: refresh_normal_settings_brightness_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB;
+            then:
+              - lambda: |-
+                  int pending = id(normal_knob_pending_value);
+                  if (pending == 4) {
+                    pending = 2;
+                  } else if (pending == 2) {
+                    pending = 1;
+                  }
+                  id(normal_knob_pending_value) = pending;
+              - script.execute: refresh_normal_settings_knob_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL;
+            then:
+              - lambda: |-
+                  if (id(normal_user_manual_qrcode_index) < 2) {
+                    id(normal_user_manual_qrcode_index)++;
+                  }
+                  ESP_LOGI("input", "user manual qrcode select: %d", id(normal_user_manual_qrcode_index));
+              - script.execute: refresh_normal_settings_user_manual_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_page_index) != 0 && !id(normal_device_detail_active) &&
+                       !id(ha_light_active);
+            then:
+              - lambda: |-
+                  switch (id(normal_page_index)) {
+                    case 1:
+                      id(normal_page_index) = 4;
+                      break;
+                    case 4:
+                      id(normal_page_index) = 5;
+                      break;
+                    case 5:
+                      id(normal_page_index) = 0;
+                      break;
+                    default:
+                      id(normal_page_index) = 1;
+                      break;
+                  }
+        - lambda: |-
+            if (id(normal_device_detail_curtain_adjust_pending)) {
+              id(normal_device_detail_curtain_adjust_pending) = false;
+            }
+        - if:
+            condition:
+              lambda: |-
+                return id(standby_wakeup_pending);
+            then:
+              - script.execute: exit_standby_mode
+        - lambda: |-
+            id(standby_wakeup_pending) = false;
+        - if:
+            condition:
+              lambda: |-
+                return id(sleep_wakeup_pending);
+            then:
+              - script.execute: exit_sleep_mode
+        - lambda: |-
+            id(ui_presenter)->notify_user_activity();
+    on_anticlockwise:
+      then:
+        - lambda: |-
+            int threshold = id(normal_knob_applied_value);
+            if (threshold != 1 && threshold != 2 && threshold != 4) {
+              threshold = 1;
+            }
+            id(normal_knob_ccw_accumulator) = 0;
+            id(normal_knob_cw_accumulator)++;
+            if (id(normal_knob_cw_accumulator) >= threshold) {
+              id(normal_knob_cw_accumulator) = 0;
+              id(normal_knob_event_pass) = true;
+            } else {
+              id(normal_knob_event_pass) = false;
+            }
+        - if:
+            condition:
+              lambda: |-
+                if (!id(sleep_mode_state) && id(ui_presenter)->is_standby_active()) {
+                  id(standby_wakeup_pending) = true;
+                  id(standby_input_suppressed_until_ms) = millis() + 350;
+                }
+                return id(sleep_mode_state);
+            then:
+              - lambda: |-
+                  id(sleep_wakeup_pending) = true;
+        - if:
+            condition:
+              lambda: |-
+                return id(screen_off_state);
+            then:
+              - switch.turn_off: ha_screen_off
+        - lambda: |-
+            if (millis() < id(standby_input_suppressed_until_ms)) {
+              id(normal_knob_event_pass) = false;
+            }
+        - if:
+            condition:
+              lambda: |-
+                return id(ui_presenter)->is_normal_mode_active() &&
+                       !id(ui_presenter)->is_standby_active() &&
+                       id(mode_manager)->is_provisioning_mode_enabled();
+            then:
+              - lambda: |-
+                  id(normal_knob_event_pass) = false;
+        - if:
+            condition:
+              lambda: |-
+                int total = id(normal_device_count);
+                if (total < 0) total = 0;
+                if (total > 10) total = 10;
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_page_index) == 0 && id(normal_device_selected_index) > 0;
+            then:
+              - lambda: |-
+                  id(normal_device_selected_index)--;
+              - script.execute:
+                  id: show_normal_device_entry_page
+                  direction: -1
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS;
+            then:
+              - lambda: |-
+                  if (id(normal_settings_selected_index) > 0) {
+                    id(normal_settings_selected_index)--;
+                  }
+                  ESP_LOGI("input", "settings detail select: %d", id(normal_settings_selected_index));
+              - script.execute: refresh_normal_settings_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN &&
+                       id(normal_device_detail_online) &&
+                       !id(key_btn).state;
+            then:
+              - lambda: |-
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  id(normal_device_detail_curtain_target_position) = 0;
+                  ESP_LOGI("input", "curtain detail anticlockwise: target_position=%d", id(normal_device_detail_curtain_target_position));
+                  id(key_long_press_handled) = true;
+                  id(ui_presenter)->notify_user_activity();
+              - script.execute: refresh_normal_curtain_detail_page
+              - homeassistant.service:
+                  service: cover.set_cover_position
+                  data_template:
+                    entity_id: "{{ target_entity_id }}"
+                    position: "0"
+                  variables:
+                    target_entity_id: !lambda |-
+                      int detail_index = id(normal_device_detail_index);
+                      if (detail_index < 0) detail_index = 0;
+                      if (detail_index > 9) detail_index = 9;
+                      return id(ui_presenter)->get_normal_device_entity_id(detail_index);
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN &&
+                       id(normal_device_detail_online) &&
+                       id(key_btn).state &&
+                       (millis() - id(key_press_started_ms) < 610) &&
+                       !id(normal_device_detail_curtain_adjust_active);
+            then:
+              - lambda: |-
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  const int feedback_position = std::clamp((int) id(app_storage)->get_normal_ui_device_position(detail_index), 0, 100);
+                  id(normal_device_detail_curtain_feedback_position) = feedback_position;
+                  id(normal_device_detail_curtain_target_position) = feedback_position;
+                  id(normal_device_detail_curtain_adjust_active) = true;
+                  id(normal_device_detail_curtain_adjust_pending) = true;
+                  id(normal_clear_wifi_allowed) = false;
+                  id(key_long_press_handled) = true;
+                  int target_position = id(normal_device_detail_curtain_target_position) - 1;
+                  if (target_position < 0) target_position = 0;
+                  id(normal_device_detail_curtain_target_position) = target_position;
+                  ESP_LOGI("input", "curtain detail position adjust entered ccw: feedback=%d target=%d", feedback_position, target_position);
+              - script.execute: refresh_normal_curtain_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                        id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN &&
+                       id(normal_device_detail_online) &&
+                       id(normal_device_detail_curtain_adjust_active) &&
+                       !id(normal_device_detail_curtain_adjust_pending) &&
+                       id(key_btn).state;
+            then:
+              - lambda: |-
+                  int target_position = id(normal_device_detail_curtain_target_position) - 1;
+                  if (target_position < 0) target_position = 0;
+                  id(normal_device_detail_curtain_target_position) = target_position;
+                  id(key_long_press_handled) = true;
+                  id(normal_clear_wifi_allowed) = false;
+              - script.execute: refresh_normal_curtain_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                       id(normal_device_detail_online) &&
+                       id(normal_detail_light_mode_count) > 0 &&
+                       id(key_btn).state &&
+                       (millis() - id(key_press_started_ms) >= 300);
+            then:
+              - lambda: |-
+                  id(normal_detail_light_mode_rotated) = true;
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  auto light_state = id(app_storage)->normal_device_slot(detail_index).light();
+                  auto is_mode_enabled = [&](int mode) -> bool {
+                    if (mode == 0) return light_state.custom_supports_brightness();
+                    if (mode == 1) return light_state.custom_supports_color_temperature();
+                    if (mode == 2) return light_state.custom_supports_rgb();
+                    return false;
+                  };
+                  for (int candidate = id(normal_detail_light_mode) - 1; candidate >= 0; --candidate) {
+                    if (is_mode_enabled(candidate)) {
+                      id(normal_detail_light_mode) = candidate;
+                      break;
+                    }
+                  }
+                  id(normal_clear_wifi_allowed) = false;
+                  id(key_long_press_handled) = true;
+                  ESP_LOGI("input", "light detail mode adjusted: %d", id(normal_detail_light_mode));
+              - script.execute: refresh_normal_light_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                       id(normal_device_detail_online) &&
+                       id(normal_detail_light_mode) == 1 &&
+                       !id(key_btn).state &&
+                       id(app_storage)->normal_device_slot(id(normal_device_detail_index)).light().custom_supports_color_temperature();
+            then:
+              - lambda: |-
+                  int cct_value_pct = id(normal_light_cct_value_pct);
+                  if (cct_value_pct < 0) cct_value_pct = 0;
+                  if (cct_value_pct > 10) cct_value_pct = 10;
+                  cct_value_pct -= 1;
+                  if (cct_value_pct < 0) cct_value_pct = 0;
+                  id(normal_light_cct_value_pct) = cct_value_pct;
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  auto detail_slot = id(app_storage)->normal_device_slot(detail_index);
+                  auto light_state = detail_slot.light();
+                  int cct_min_kelvin = (int) light_state.min_color_temperature_kelvin;
+                  int cct_max_kelvin = (int) light_state.max_color_temperature_kelvin;
+                  const bool has_cct_range = cct_min_kelvin > 0 && cct_max_kelvin > 0;
+                  if (!has_cct_range) {
+                    ESP_LOGW("input", "light detail CCT feedback failed: missing color temp range for index=%d", detail_index);
+                    return;
+                  }
+                  const uint16_t color_temperature = light_state.kelvin_from_color_temperature_step(cct_value_pct);
+                  esphome::onx_storage::NormalLightStatePatch patch{};
+                  patch.has_power = true;
+                  patch.is_on = true;
+                  patch.has_color_temperature_kelvin = true;
+                  patch.color_temperature_kelvin = color_temperature;
+                  if (!detail_slot.update_light(patch)) {
+                    ESP_LOGW("input", "light detail CCT feedback failed: unable to persist state for index=%d", detail_index);
+                    return;
+                  }
+                  id(normal_device_detail_is_on) = true;
+                  id(hmi_switch_state) = true;
+                  ESP_LOGI("input", "light detail CCT knob ccw: target_kelvin=%u", static_cast<unsigned int>(color_temperature));
+                  id(refresh_normal_light_detail_page).execute();
+                  id(emit_normal_cct_light_event).execute(detail_index, static_cast<int>(color_temperature));
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                       id(normal_device_detail_online) &&
+                       id(normal_detail_light_mode) == 2 &&
+                       !id(key_btn).state &&
+                       id(app_storage)->normal_device_slot(id(normal_device_detail_index)).light().custom_supports_rgb();
+            then:
+              - lambda: |-
+                  int rgb_value_pct = id(normal_light_rgb_value_pct);
+                  if (rgb_value_pct < 0) rgb_value_pct = 0;
+                  if (rgb_value_pct > 35) rgb_value_pct = 35;
+                  rgb_value_pct -= 1;
+                  if (rgb_value_pct < 0) rgb_value_pct = 35;
+                  id(normal_light_rgb_value_pct) = rgb_value_pct;
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  auto detail_slot = id(app_storage)->normal_device_slot(detail_index);
+                  esphome::onx_storage::NormalLightStatePatch patch{};
+                  patch.has_power = true;
+                  patch.is_on = true;
+                  patch.has_rgb_tick = true;
+                  patch.rgb_tick = static_cast<uint8_t>(rgb_value_pct);
+                  if (!detail_slot.update_light(patch)) {
+                    ESP_LOGW("input", "light detail RGB feedback failed: unable to persist power state for index=%d", detail_index);
+                    return;
+                  }
+                  id(normal_device_detail_is_on) = true;
+                  id(hmi_switch_state) = true;
+                  int hue = (rgb_value_pct * 10) % 360;
+                  ESP_LOGI("input", "light detail RGB knob ccw: target_hue=%d saturation=100", hue);
+                  id(refresh_normal_light_detail_page).execute();
+                  id(emit_normal_rgb_light_event).execute(detail_index, rgb_value_pct);
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) &&
+                       id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                       id(normal_device_detail_online) &&
+                       id(normal_detail_light_mode) == 0 &&
+                       !id(key_btn).state &&
+                       id(app_storage)->normal_device_slot(id(normal_device_detail_index)).light().custom_supports_brightness();
+            then:
+              - lambda: |-
+                  int detail_index = id(normal_device_detail_index);
+                  if (detail_index < 0) detail_index = 0;
+                  if (detail_index > 9) detail_index = 9;
+                  auto detail_slot = id(app_storage)->normal_device_slot(detail_index);
+                  int brightness = (int) detail_slot.light().brightness_pct;
+                  if (brightness < 1) brightness = 1;
+                  if (brightness > 100) brightness = 100;
+                  brightness -= 1;
+                  if (brightness < 1) brightness = 1;
+                  const bool new_on = brightness > 0;
+                  esphome::onx_storage::NormalLightStatePatch patch{};
+                  patch.has_power = true;
+                  patch.is_on = new_on;
+                  patch.has_brightness_pct = true;
+                  patch.brightness_pct = static_cast<uint8_t>(brightness);
+                  if (!detail_slot.update_light(patch)) {
+                    ESP_LOGW("input", "dimming light feedback failed: unable to persist state for index=%d", detail_index);
+                    return;
+                  }
+                  id(refresh_normal_light_detail_page).execute();
+                  id(emit_normal_dimming_light_event).execute(detail_index, brightness, new_on);
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS;
+            then:
+              - lambda: |-
+                  int pct = id(normal_brightness_value);
+                  if (pct < 10) pct = 10;
+                  if (pct > 100) pct = 100;
+                  pct -= 10;
+                  if (pct < 10) pct = 10;
+                  id(normal_brightness_value) = pct;
+                  float current = 0.0f;
+                  id(lcd_backlight)->current_values_as_brightness(&current);
+                  ESP_LOGI("input", "display brightness knob cw: current=%.3f target_pct=%d", current, pct);
+                  auto call = id(lcd_backlight)->make_call();
+                  call.set_brightness((float)pct / 100.0f);
+                  call.set_state(true);
+                  call.perform();
+                  id(screen_off_state) = false;
+                  id(ha_display_light_syncing) = true;
+                  auto ha_call = id(ha_light)->make_call();
+                  ha_call.set_state(true);
+                  ha_call.set_brightness((float)pct / 100.0f);
+                  ha_call.perform();
+                  id(ha_display_light_syncing) = false;
+              - script.execute: refresh_normal_settings_brightness_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB;
+            then:
+              - lambda: |-
+                  int pending = id(normal_knob_pending_value);
+                  if (pending == 1) {
+                    pending = 2;
+                  } else if (pending == 2) {
+                    pending = 4;
+                  }
+                  id(normal_knob_pending_value) = pending;
+              - script.execute: refresh_normal_settings_knob_detail_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_device_detail_active) && id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL;
+            then:
+              - lambda: |-
+                  if (id(normal_user_manual_qrcode_index) > 0) {
+                    id(normal_user_manual_qrcode_index)--;
+                  }
+                  ESP_LOGI("input", "user manual qrcode select: %d", id(normal_user_manual_qrcode_index));
+              - script.execute: refresh_normal_settings_user_manual_page
+              - lambda: |-
+                  id(ui_presenter)->notify_user_activity();
+        - if:
+            condition:
+              lambda: |-
+                return id(normal_knob_event_pass) &&
+                       !id(screen_off_state) && id(ui_presenter)->is_normal_mode_active() && !id(ui_presenter)->is_standby_active() && !id(standby_wakeup_pending) &&
+                       id(normal_page_index) != 0 && !id(normal_device_detail_active) &&
+                       !id(ha_light_active);
+            then:
+              - lambda: |-
+                  switch (id(normal_page_index)) {
+                    case 1:
+                      id(normal_page_index) = 0;
+                      break;
+                    case 4:
+                      id(normal_page_index) = 1;
+                      break;
+                    case 5:
+                      id(normal_page_index) = 4;
+                      break;
+                    default:
+                      id(normal_page_index) = 1;
+                      break;
+                  }
+        - lambda: |-
+            if (id(normal_device_detail_curtain_adjust_pending)) {
+              id(normal_device_detail_curtain_adjust_pending) = false;
+            }
+        - if:
+            condition:
+              lambda: |-
+                return id(standby_wakeup_pending);
+            then:
+              - script.execute: exit_standby_mode
+        - lambda: |-
+            id(standby_wakeup_pending) = false;
+        - if:
+            condition:
+              lambda: |-
+                return id(sleep_wakeup_pending);
+            then:
+              - script.execute: exit_sleep_mode
+        - lambda: |-
+            id(ui_presenter)->notify_user_activity();

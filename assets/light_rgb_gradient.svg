@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="224" height="224" viewBox="0 0 224 224"><g transform="rotate(90 112 112)">
+  <defs xmlns="http://www.w3.org/2000/svg">
+    <mask id="ringMask" maskUnits="userSpaceOnUse">
+      <rect width="224" height="224" fill="black"/>
+      <circle cx="112" cy="112" r="107" fill="none" stroke="white" stroke-width="10.5"/>
+    </mask>
+
+    <linearGradient id="g1" x1="50%" y1="0%" x2="100%" y2="28.9%">
+      <stop offset="0%" stop-color="hsl(0, 100%, 50%)"/>
+      <stop offset="100%" stop-color="hsl(60, 100%, 50%)"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="100%" y1="28.9%" x2="100%" y2="71.1%">
+      <stop offset="0%" stop-color="hsl(60, 100%, 50%)"/>
+      <stop offset="100%" stop-color="hsl(120, 100%, 50%)"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="100%" y1="71.1%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="hsl(120, 100%, 50%)"/>
+      <stop offset="100%" stop-color="hsl(180, 100%, 50%)"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="50%" y1="100%" x2="0%" y2="71.1%">
+      <stop offset="0%" stop-color="hsl(180, 100%, 50%)"/>
+      <stop offset="100%" stop-color="hsl(240, 100%, 50%)"/>
+    </linearGradient>
+    <linearGradient id="g5" x1="0%" y1="71.1%" x2="0%" y2="28.9%">
+      <stop offset="0%" stop-color="hsl(240, 100%, 50%)"/>
+      <stop offset="100%" stop-color="hsl(300, 100%, 50%)"/>
+    </linearGradient>
+    <linearGradient id="g6" x1="0%" y1="28.9%" x2="50%" y2="0%">
+      <stop offset="0%" stop-color="hsl(300, 100%, 50%)"/>
+      <stop offset="100%" stop-color="hsl(360, 100%, 50%)"/>
+    </linearGradient>
+  </defs>
+
+  <g xmlns="http://www.w3.org/2000/svg" mask="url(#ringMask)">
+    <path d="M 112 112 L 112 -8 A 120 120 0 0 1 215.9 52 Z" fill="url(#g1)" stroke="url(#g1)" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M 112 112 L 215.9 52 A 120 120 0 0 1 215.9 172 Z" fill="url(#g2)" stroke="url(#g2)" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M 112 112 L 215.9 172 A 120 120 0 0 1 112 232 Z" fill="url(#g3)" stroke="url(#g3)" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M 112 112 L 112 232 A 120 120 0 0 1 8.1 172 Z" fill="url(#g4)" stroke="url(#g4)" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M 112 112 L 8.1 172 A 120 120 0 0 1 8.1 52 Z" fill="url(#g5)" stroke="url(#g5)" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M 112 112 L 8.1 52 A 120 120 0 0 1 112 -8 Z" fill="url(#g6)" stroke="url(#g6)" stroke-width="1.5" stroke-linejoin="round"/>
+  </g>
+</g></svg>

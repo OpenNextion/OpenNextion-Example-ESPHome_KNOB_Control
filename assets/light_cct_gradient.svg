@@ -1,0 +1,16 @@
+<svg width="224" height="224" viewBox="0 0 224 224" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="arcGradient" x1="17%" y1="83%" x2="83%" y2="83%">
+      <stop offset="0%" stop-color="#DCEBFF" />
+      <stop offset="33%" stop-color="#FFFFFF" />
+      <stop offset="66%" stop-color="#FFD27A" />
+      <stop offset="100%" stop-color="#FFB347" />
+    </linearGradient>
+  </defs>
+
+  <path d="M 36.34,187.66 A 107,107 0 1,1 187.66,187.66"
+        fill="none"
+        stroke="url(#arcGradient)"
+        stroke-width="10"
+        stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,71 @@
+logger:
+  level: ${logger_level}
+  initial_level: NONE
+  baud_rate: 115200
+  hardware_uart: USB_SERIAL_JTAG
+  # Keep the default ESP32-S3 debug/download path on USB Serial/JTAG so the
+  # host can always rediscover the device after boot.
+
+api:
+  reboot_timeout: 0s   # 延长到 60 分钟，或设为 0s 完全禁用
+
+ota:
+  # Production OTA only: Home Assistant exposes the update entity below and
+  # the device pulls the released firmware from the HTTPS manifest.
+  - platform: http_request
+
+update:
+  - platform: http_request
+    id: product_firmware_update
+    name: "Firmware Update"
+    source: ${product_firmware_manifest_url}
+    update_interval: 6h
+    entity_category: diagnostic
+
+wifi:
+  # Normal Wi-Fi is applied by onx_mode_manager after runtime state is initialized.
+  ap:
+    ssid: "ONX2424G013"
+    password: "${ap_password}"
+    ap_timeout: 0s
+  on_connect:
+    then:
+      - lambda: |-
+          id(normal_wifi_connected) = true;
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active();
+          then:
+            - lvgl.widget.refresh: standby_wifi_online_widget
+            - lvgl.widget.refresh: standby_wifi_offline_widget
+            - script.execute: refresh_normal_device_page
+            - script.execute: refresh_normal_switch_detail_page
+            - script.execute: refresh_normal_light_detail_page
+            - script.execute: refresh_normal_curtain_detail_page
+  on_disconnect:
+    then:
+      - lambda: |-
+          id(normal_wifi_connected) = false;
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active();
+          then:
+            - lvgl.widget.refresh: standby_wifi_online_widget
+            - lvgl.widget.refresh: standby_wifi_offline_widget
+            - script.execute: refresh_normal_device_page
+            - script.execute: refresh_normal_switch_detail_page
+            - script.execute: refresh_normal_light_detail_page
+            - script.execute: refresh_normal_curtain_detail_page
+
+captive_portal:
+
+mdns:
+  disabled: false
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO43
+  rx_pin: GPIO44
+  baud_rate: ${uart_baud}

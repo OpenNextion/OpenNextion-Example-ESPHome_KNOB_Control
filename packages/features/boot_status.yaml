@@ -1,0 +1,19 @@
+# Boot/status pages used before a feature-specific page takes over.
+
+lvgl:
+  pages:
+    - id: boot_page
+      bg_color: 0x000000
+      border_width: 0
+      outline_width: 0
+      radius: 0
+      pad_all: 0
+      scrollable: false
+      widgets:
+        - label:
+            x: 0
+            y: 0
+            align: center
+            text_font: fonts_MiSans_Bold_24
+            text_color: 0xFFFFFF
+            text: "Open Nextion"

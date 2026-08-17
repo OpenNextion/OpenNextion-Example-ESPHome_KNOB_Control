@@ -1,0 +1,113 @@
+spi:
+  id: bus_spi
+  clk_pin: GPIO5
+  mosi_pin: GPIO1
+
+output:
+  - platform: ledc
+    id: lcd_backlight_pwm
+    pin: GPIO6
+    frequency: 10000Hz
+
+light:
+  - platform: monochromatic
+    id: lcd_backlight
+    output: lcd_backlight_pwm
+    restore_mode: ALWAYS_OFF
+    default_transition_length: 0s
+    flash_transition_length: 0s
+    internal: true
+
+# Font paths are relative to the main ESPHome config directory.
+font:
+  - file: "fonts/MiSans-Bold.ttf"
+    id: fonts_MiSans_Bold_12
+    size: 12
+    bpp: 8
+  - file: "fonts/MiSans-Bold.ttf"
+    id: fonts_MiSans_Bold_14
+    size: 14
+    bpp: 8
+  - file: "fonts/MiSans-Bold.ttf"
+    id: fonts_MiSans_Bold_16
+    size: 16
+    bpp: 8
+  - file: "fonts/MiSans-Bold.ttf"
+    id: fonts_MiSans_Bold_18
+    size: 18
+    bpp: 8
+  - file: "fonts/MiSans-Bold.ttf"
+    id: fonts_MiSans_Bold_22
+    size: 22
+    bpp: 8
+  - file: "fonts/MiSans-Bold.ttf"
+    id: fonts_MiSans_Bold_24
+    size: 24
+    bpp: 8
+  - file: "fonts/MiSans-Bold.ttf"
+    id: fonts_MiSans_Bold_60
+    size: 60
+    bpp: 8
+  - file: "fonts/MiSans-Bold.ttf"
+    id: fonts_MiSans_Bold_64
+    size: 64
+    bpp: 8
+  - file: "fonts/MiSans-Medium.ttf"
+    id: fonts_MiSans_Medium_14
+    size: 14
+    bpp: 8
+  - file: "fonts/MiSans-Medium.ttf"
+    id: fonts_MiSans_Medium_15
+    size: 15
+    bpp: 8
+  - file: "fonts/MiSans-Medium.ttf"
+    id: fonts_MiSans_Medium_12
+    size: 12
+    bpp: 8
+  - file: "fonts/MiSans-Medium.ttf"
+    id: fonts_MiSans_Medium_16
+    size: 16
+    bpp: 8
+  - file: "fonts/MiSans-Medium.ttf"
+    id: fonts_MiSans_Medium_18
+    size: 18
+    bpp: 8
+  - file: "fonts/MiSans-Medium.ttf"
+    id: fonts_MiSans_Medium_20
+    size: 20
+    bpp: 8
+  - file: "fonts/MiSans-Medium.ttf"
+    id: fonts_MiSans_Medium_64
+    size: 64
+    bpp: 8
+  - file: "fonts/MiSans-Medium.ttf"
+    id: fonts_MiSans_Medium_24
+    size: 24
+    bpp: 8
+  - file: "fonts/MiSans-Medium.ttf"
+    id: fonts_MiSans_Medium_32
+    size: 32
+    bpp: 8
+  
+
+display:
+  - platform: ili9xxx
+    id: lcd_display
+    model: GC9A01A
+    spi_id: bus_spi
+    data_rate: ${lcd_spi_data_rate}
+    color_order: BGR
+    dc_pin: GPIO3
+    cs_pin: GPIO2
+    reset_pin: GPIO8
+    invert_colors: true
+    update_interval: never
+    auto_clear_enabled: false
+
+lvgl:
+  id: lvgl_ui
+  displays:
+    - lcd_display
+  buffer_size: 100%
+  default_font: fonts_MiSans_Medium_14
+  log_level: WARN

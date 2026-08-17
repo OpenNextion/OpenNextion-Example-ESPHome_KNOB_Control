@@ -1,0 +1,1602 @@
+# Normal mode feature package.
+# Handles the default customer UI behavior.
+
+json:
+
+number:
+  - platform: template
+    name: "1. Standby timeout"
+    id: standby_timeout_seconds
+    icon: "mdi:sleep"
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    initial_value: 300
+    min_value: 1
+    max_value: 900
+    step: 1
+    on_value:
+      then:
+        - lambda: |-
+            int timeout_seconds = (int) x;
+            if (timeout_seconds < 1) {
+              timeout_seconds = 1;
+            }
+            if (timeout_seconds > 900) {
+              timeout_seconds = 900;
+            }
+            id(ui_presenter)->set_standby_timeout_ms((uint32_t) timeout_seconds * 1000U);
+  - platform: template
+    name: "5. Sleep timeout"
+    id: sleep_timeout_seconds
+    icon: "mdi:timer-sand"
+    optimistic: true
+    restore_value: false
+    entity_category: config
+    initial_value: 60
+    min_value: 1
+    max_value: 3600
+    step: 1
+    on_value:
+      then:
+        - lambda: |-
+            int timeout_seconds = (int) x;
+            if (timeout_seconds < 1) {
+              timeout_seconds = 1;
+            }
+            if (timeout_seconds > 3600) {
+              timeout_seconds = 3600;
+            }
+            id(ui_presenter)->set_sleep_mode_config(
+                id(sleep_mode_enabled).state,
+                id(sleep_mode_start_time).state,
+                id(sleep_mode_end_time).state,
+                (uint32_t) timeout_seconds * 1000U);
+
+text:
+  - platform: template
+    name: "3. Sleep start time"
+    id: sleep_mode_start_time
+    icon: "mdi:bed-clock"
+    optimistic: false
+    restore_value: false
+    entity_category: config
+    mode: text
+    initial_value: "23:00:00"
+    set_action:
+      - lambda: |-
+          bool valid =
+              x.length() == 8 &&
+              x[2] == ':' &&
+              x[5] == ':' &&
+              x[0] >= '0' && x[0] <= '2' &&
+              x[1] >= '0' && x[1] <= '9' &&
+              x[3] >= '0' && x[3] <= '5' &&
+              x[4] >= '0' && x[4] <= '9' &&
+              x[6] >= '0' && x[6] <= '5' &&
+              x[7] >= '0' && x[7] <= '9';
+
+          if (valid) {
+            int hour   = (x[0] - '0') * 10 + (x[1] - '0');
+            int minute = (x[3] - '0') * 10 + (x[4] - '0');
+            int second = (x[6] - '0') * 10 + (x[7] - '0');
+
+            valid = hour <= 23 && minute <= 59 && second <= 59;
+          }
+
+          if (valid) {
+            id(ui_presenter)->set_sleep_mode_config(
+              id(sleep_mode_enabled).state,
+              x,
+              id(sleep_mode_end_time).state,
+              (uint32_t) id(sleep_timeout_seconds).state * 1000U);
+            id(sleep_mode_start_time).publish_state(x);
+          } else {
+            ESP_LOGW("time_setting", "Invalid time: %s", x.c_str());
+          }
+          
+
+  - platform: template
+    name: "4. Sleep end time"
+    id: sleep_mode_end_time
+    icon: "mdi:bed-clock"
+    optimistic: false
+    restore_value: false
+    entity_category: config
+    mode: text
+    initial_value: "07:00:00"
+    set_action:
+      - lambda: |-
+          bool valid =
+              x.length() == 8 &&
+              x[2] == ':' &&
+              x[5] == ':' &&
+              x[0] >= '0' && x[0] <= '2' &&
+              x[1] >= '0' && x[1] <= '9' &&
+              x[3] >= '0' && x[3] <= '5' &&
+              x[4] >= '0' && x[4] <= '9' &&
+              x[6] >= '0' && x[6] <= '5' &&
+              x[7] >= '0' && x[7] <= '9';
+
+          if (valid) {
+            int hour   = (x[0] - '0') * 10 + (x[1] - '0');
+            int minute = (x[3] - '0') * 10 + (x[4] - '0');
+            int second = (x[6] - '0') * 10 + (x[7] - '0');
+
+            valid = hour <= 23 && minute <= 59 && second <= 59;
+          }
+
+          if (valid) {
+            id(ui_presenter)->set_sleep_mode_config(
+              id(sleep_mode_enabled).state,
+              id(sleep_mode_start_time).state,
+              x,
+              (uint32_t) id(sleep_timeout_seconds).state * 1000U);
+            id(sleep_mode_end_time).publish_state(x);
+          } else {
+            ESP_LOGW("time_setting", "Invalid time: %s", x.c_str());
+          }
+
+  - platform: template
+    name: "6. HA host"
+    id: ha_host
+    icon: "mdi:home-account"
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    mode: text
+    initial_value: "homeassistant.local"
+
+  - platform: template
+    name: "7. HA token"
+    id: ha_token
+    icon: "mdi:lock"
+    min_length: 0
+    max_length: 255
+    mode: text
+    initial_value: ""
+    restore_value: false
+    optimistic: false
+    entity_category: config
+    set_action:
+      - lambda: |-
+          save_ha_token_value(x);
+          id(ha_token).publish_state("");
+          id(ha_token_status).update();
+
+button:
+  - platform: template
+    name: "8. Refresh Entity List"
+    id: fetch_entities_btn
+    entity_category: config
+    on_press:
+      - lambda: |-
+          if (id(ha_host).state.empty()) {
+            id(ha_host).publish_state("homeassistant.local");
+          }
+          request_ha_entity_list_over_websocket(id(ha_host).state,
+                                                id(device1_config), id(device2_config),
+                                                id(device3_config), id(device4_config), id(device5_config),
+                                                id(device6_config), id(device7_config), id(device8_config),
+                                                id(device9_config), id(device10_config),
+                                                id(standby_weather_config),
+                                                id(api_server));
+          id(ha_token_status).update();
+  - platform: template
+    name: "20. Save Entity Config"
+    id: save_entity_config_btn
+    entity_category: config
+    on_press:
+      - lambda: |-
+          const bool entity_changed = save_entity_config_from_selects(id(device1_config), id(device2_config),
+                                                                      id(device3_config), id(device4_config),
+                                                                      id(device5_config), id(device6_config),
+                                                                      id(device7_config), id(device8_config),
+                                                                      id(device9_config), id(device10_config),
+                                                                      id(standby_weather_config));
+          auto count_configured_device = [](esphome::select::Select *select) -> int {
+            if (select == nullptr) {
+              return 0;
+            }
+            const std::string entity_id = extract_entity_id_from_device1_option(select->state);
+            return !entity_id.empty() && is_supported_normal_device_entity_id(entity_id.c_str()) ? 1 : 0;
+          };
+          const int configured_device_count =
+              count_configured_device(id(device1_config)) +
+              count_configured_device(id(device2_config)) +
+              count_configured_device(id(device3_config)) +
+              count_configured_device(id(device4_config)) +
+              count_configured_device(id(device5_config)) +
+              count_configured_device(id(device6_config)) +
+              count_configured_device(id(device7_config)) +
+              count_configured_device(id(device8_config)) +
+              count_configured_device(id(device9_config)) +
+              count_configured_device(id(device10_config));
+          id(normal_device_count) = configured_device_count;
+          const int last_selectable = configured_device_count == 0 ? (id(normal_ha_added) ? 1 : 2) : configured_device_count;
+          if (id(normal_device_selected_index) > last_selectable) {
+            id(normal_device_selected_index) = last_selectable;
+          }
+          if (id(normal_device_selected_index) < 0) {
+            id(normal_device_selected_index) = 0;
+          }
+          subscribe_device_config_entities_from_selects(id(device1_config), id(device2_config),
+                                                        id(device3_config), id(device4_config), id(device5_config),
+                                                        id(device6_config), id(device7_config), id(device8_config),
+                                                        id(device9_config), id(device10_config),
+                                                        id(standby_weather_config), id(api_server),
+                                                        &id(standby_weather_entity_id),
+                                                        &id(standby_weather_state),
+                                                        &id(standby_weather_temperature),
+                                                        &id(standby_weather_temperature_unit),
+                                                        &id(standby_weather_humidity));
+          if (entity_changed) {
+            custom_logic::disconnect_all_clients_for_refresh(id(api_server));
+          }
+          apply_device1_type_options(id(device1_type));
+          apply_device2_type_options(id(device2_type));
+          apply_device3_type_options(id(device3_type));
+          apply_device4_type_options(id(device4_type));
+          apply_device5_type_options(id(device5_type));
+          apply_device6_type_options(id(device6_type));
+          apply_device7_type_options(id(device7_type));
+          apply_device8_type_options(id(device8_type));
+          apply_device9_type_options(id(device9_type));
+          apply_device10_type_options(id(device10_type));
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     !id(ui_presenter)->is_standby_active() &&
+                     id(normal_page_index) == 0;
+          then:
+            - script.execute:
+                id: show_normal_device_entry_page
+                direction: 0
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device1_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device1_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device1_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device1_config).state), body)) {
+                          apply_device1_type_options(id(device1_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device1 light state request failed");
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device2_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device2_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device2_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device2_config).state), body)) {
+                          apply_device2_type_options(id(device2_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device2 light state request failed");
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device3_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device3_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device3_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device3_config).state), body)) {
+                          apply_device3_type_options(id(device3_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device3 light state request failed");
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device4_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device4_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device4_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device4_config).state), body)) {
+                          apply_device4_type_options(id(device4_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device4 light state request failed");
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device5_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device5_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device5_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device5_config).state), body)) {
+                          apply_device5_type_options(id(device5_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device5 light state request failed");
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device6_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device6_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device6_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device6_config).state), body)) {
+                          apply_device6_type_options(id(device6_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device6 light state request failed");
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device7_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device7_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device7_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device7_config).state), body)) {
+                          apply_device7_type_options(id(device7_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device7 light state request failed");
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device8_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device8_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device8_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device8_config).state), body)) {
+                          apply_device8_type_options(id(device8_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device8 light state request failed");
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device9_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device9_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device9_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device9_config).state), body)) {
+                          apply_device9_type_options(id(device9_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device9 light state request failed");
+      - if:
+          condition:
+            lambda: |-
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device10_config).state);
+              return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device10_config).state));
+                capture_response: true
+                max_response_buffer_size: 64kB
+                request_headers:
+                  Authorization: !lambda |-
+                    return get_ha_authorization_header();
+                  Content-Type: "application/json"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (update_device10_light_config_from_http_response(
+                                extract_entity_id_from_device1_option(id(device10_config).state), body)) {
+                          apply_device10_type_options(id(device10_type));
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGE("HA_API", "Fetch device10 light state request failed");
+
+http_request:
+  timeout: 15s
+
+select:
+  - id: device1_config
+    name: 10. Device1
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device1_type
+    name: 21. Device1 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device1 type");
+          update_device1_custom_type_from_option(x);
+          id(device1_type).publish_state(x);
+  - id: device2_config
+    name: 11. Device2
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device2_type
+    name: 22. Device2 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device2 type");
+          update_device2_custom_type_from_option(x);
+          id(device2_type).publish_state(x);
+  - id: device3_config
+    name: 12. Device3
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device3_type
+    name: 23. Device3 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device3 type");
+          update_device3_custom_type_from_option(x);
+          id(device3_type).publish_state(x);
+  - id: device4_config
+    name: 13. Device4
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device4_type
+    name: 24. Device4 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device4 type");
+          update_device4_custom_type_from_option(x);
+          id(device4_type).publish_state(x);
+  - id: device5_config
+    name: 14. Device5
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device5_type
+    name: 25. Device5 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device5 type");
+          update_device5_custom_type_from_option(x);
+          id(device5_type).publish_state(x);
+  - id: device6_config
+    name: 15. Device6
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device6_type
+    name: 26. Device6 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device6 type");
+          update_device6_custom_type_from_option(x);
+          id(device6_type).publish_state(x);
+  - id: device7_config
+    name: 16. Device7
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device7_type
+    name: 27. Device7 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device7 type");
+          update_device7_custom_type_from_option(x);
+          id(device7_type).publish_state(x);
+  - id: device8_config
+    name: 17. Device8
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device8_type
+    name: 28. Device8 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device8 type");
+          update_device8_custom_type_from_option(x);
+          id(device8_type).publish_state(x);
+  - id: device9_config
+    name: 18. Device9
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device9_type
+    name: 29. Device9 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device9 type");
+          update_device9_custom_type_from_option(x);
+          id(device9_type).publish_state(x);
+  - id: device10_config
+    name: 19. Device10
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:format-list-bulleted
+  - platform: template
+    id: device10_type
+    name: 30. Device10 Config
+    optimistic: false
+    restore_value: true
+    entity_category: config
+    options:
+      - "Switch"
+    initial_option: "Switch"
+    set_action:
+      - logger.log:
+          format: "Chosen option: %s"
+          args: ["x.c_str()"]
+      - lambda: |-
+          id(sys_log).publish_state("Updating device10 type");
+          update_device10_custom_type_from_option(x);
+          id(device10_type).publish_state(x);
+  - id: standby_weather_config
+    name: 9. Weather
+    platform: template
+    options:
+      - none
+    initial_option: none
+    optimistic: true
+    restore_value: false
+    internal: false
+    disabled_by_default: false
+    entity_category: config
+    icon: mdi:weather-partly-cloudy
+
+text_sensor:
+  - platform: template
+    name: "HA Token Status"
+    id: ha_token_status
+    icon: "mdi:shield-key"
+    entity_category: diagnostic
+    update_interval: 30s
+    lambda: |-
+      return {std::string(get_ha_token_status_text())};
+
+  - platform: template
+    name: "How to use"
+    id: how_to_use
+    icon: "mdi:open-in-new"
+    entity_category: diagnostic
+    lambda: |-
+      return {"https://opennextion.github.io/OpenNextion-SKU-ONX2424G013/User%20Manual.html"};
+
+  - platform: template
+    id: sys_log
+    name: "Sys log"
+    icon: "mdi:alert-circle-outline"
+    entity_category: diagnostic
+
+switch:
+  - platform: gpio
+    id: normal_gpio_io10
+    name: "HMI IO10"
+    pin: GPIO10
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - lambda: |-
+            for (int i = 0; i < 10; i++) {
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(i);
+              if (local_hmi_gpio_switch_io_from_entity_id(entity_id) == 10) {
+                id(app_storage)->set_normal_ui_device_state(i, true);
+              }
+            }
+            if (id(normal_device_detail_active)) id(refresh_normal_switch_detail_page).execute();
+    on_turn_off:
+      then:
+        - lambda: |-
+            for (int i = 0; i < 10; i++) {
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(i);
+              if (local_hmi_gpio_switch_io_from_entity_id(entity_id) == 10) {
+                id(app_storage)->set_normal_ui_device_state(i, false);
+              }
+            }
+            if (id(normal_device_detail_active)) id(refresh_normal_switch_detail_page).execute();
+  - platform: gpio
+    id: normal_gpio_io11
+    name: "HMI IO11"
+    pin: GPIO11
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - lambda: |-
+            for (int i = 0; i < 10; i++) {
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(i);
+              if (local_hmi_gpio_switch_io_from_entity_id(entity_id) == 11) {
+                id(app_storage)->set_normal_ui_device_state(i, true);
+              }
+            }
+            if (id(normal_device_detail_active)) id(refresh_normal_switch_detail_page).execute();
+    on_turn_off:
+      then:
+        - lambda: |-
+            for (int i = 0; i < 10; i++) {
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(i);
+              if (local_hmi_gpio_switch_io_from_entity_id(entity_id) == 11) {
+                id(app_storage)->set_normal_ui_device_state(i, false);
+              }
+            }
+            if (id(normal_device_detail_active)) id(refresh_normal_switch_detail_page).execute();
+  - platform: gpio
+    id: normal_gpio_io17
+    name: "HMI IO17"
+    pin: GPIO17
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - lambda: |-
+            for (int i = 0; i < 10; i++) {
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(i);
+              if (local_hmi_gpio_switch_io_from_entity_id(entity_id) == 17) {
+                id(app_storage)->set_normal_ui_device_state(i, true);
+              }
+            }
+            if (id(normal_device_detail_active)) id(refresh_normal_switch_detail_page).execute();
+    on_turn_off:
+      then:
+        - lambda: |-
+            for (int i = 0; i < 10; i++) {
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(i);
+              if (local_hmi_gpio_switch_io_from_entity_id(entity_id) == 17) {
+                id(app_storage)->set_normal_ui_device_state(i, false);
+              }
+            }
+            if (id(normal_device_detail_active)) id(refresh_normal_switch_detail_page).execute();
+  - platform: gpio
+    id: normal_gpio_io18
+    name: "HMI IO18"
+    pin: GPIO18
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - lambda: |-
+            for (int i = 0; i < 10; i++) {
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(i);
+              if (local_hmi_gpio_switch_io_from_entity_id(entity_id) == 18) {
+                id(app_storage)->set_normal_ui_device_state(i, true);
+              }
+            }
+            if (id(normal_device_detail_active)) id(refresh_normal_switch_detail_page).execute();
+    on_turn_off:
+      then:
+        - lambda: |-
+            for (int i = 0; i < 10; i++) {
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(i);
+              if (local_hmi_gpio_switch_io_from_entity_id(entity_id) == 18) {
+                id(app_storage)->set_normal_ui_device_state(i, false);
+              }
+            }
+            if (id(normal_device_detail_active)) id(refresh_normal_switch_detail_page).execute();
+  - platform: template
+    name: "Screen Off"
+    id: ha_screen_off
+    internal: true
+    optimistic: true
+    on_turn_on:
+      then:
+        - lambda: |-
+            if(id(boot_finished)) {
+              id(screen_off_state) = true;
+              auto call = id(lcd_backlight)->make_call();
+              call.set_brightness(0.0f);
+              call.set_state(false);
+              call.perform();
+              id(ha_display_light_syncing) = true;
+              auto ha_call = id(ha_light)->make_call();
+              ha_call.set_state(false);
+              ha_call.perform();
+              id(ha_display_light_syncing) = false;
+            }
+    on_turn_off:
+      then:
+        - lambda: |-
+            if(id(boot_finished)) {
+              id(screen_off_state) = false;
+              auto call = id(lcd_backlight)->make_call();
+              int pct = id(normal_brightness_value);
+              if (pct < 10) pct = 10;
+              if (pct > 100) pct = 100;
+              id(normal_brightness_value) = pct;
+              call.set_brightness((float)pct / 100.0f);
+              call.set_state(true);
+              call.perform();
+              id(ha_display_light_syncing) = true;
+              auto ha_call = id(ha_light)->make_call();
+              ha_call.set_state(true);
+              ha_call.set_brightness((float)pct / 100.0f);
+              ha_call.perform();
+              id(ha_display_light_syncing) = false;
+            }
+  - platform: template
+    name: "2. Sleep mode enabled"
+    id: sleep_mode_enabled
+    icon: "mdi:sleep"
+    optimistic: true
+    restore_mode: DISABLED
+    entity_category: config
+    turn_on_action:
+      - lambda: |-
+          id(ui_presenter)->set_sleep_mode_config(
+              true,
+              id(sleep_mode_start_time).state,
+              id(sleep_mode_end_time).state,
+              (uint32_t) id(sleep_timeout_seconds).state * 1000U);
+    turn_off_action:
+      - lambda: |-
+          id(ui_presenter)->set_sleep_mode_config(
+              false,
+              id(sleep_mode_start_time).state,
+              id(sleep_mode_end_time).state,
+              (uint32_t) id(sleep_timeout_seconds).state * 1000U);
+
+output:
+  - platform: template
+    type: float
+    id: ha_light_output
+    write_action:
+      - lambda: |-
+          if (!id(boot_finished) || id(ha_display_light_syncing)) {
+            return;
+          }
+          if (state <= 0.0f) {
+            id(ha_screen_off).turn_on();
+            return;
+          }
+          const bool wake_from_sleep = id(sleep_mode_state);
+          const bool wake_from_standby = !wake_from_sleep && id(ui_presenter)->is_standby_active();
+          if (wake_from_sleep || wake_from_standby) {
+            id(sleep_mode_state) = false;
+            id(sleep_wakeup_pending) = false;
+            id(standby_wakeup_pending) = false;
+            id(standby_input_suppressed_until_ms) = 0;
+            id(ui_presenter)->notify_user_activity();
+            ESP_LOGI("normal_mode", "screen light control woke display: source=%s",
+                     wake_from_sleep ? "sleep" : "standby");
+          }
+          int pct = (int) roundf(state * 100.0f);
+          if (pct < 10) pct = 10;
+          if (pct > 100) pct = 100;
+          id(normal_brightness_value) = pct;
+          id(screen_off_state) = false;
+          if (id(ha_screen_off).state) {
+            id(ha_screen_off).turn_off();
+            return;
+          }
+          auto call = id(lcd_backlight)->make_call();
+          call.set_brightness((float)pct / 100.0f);
+          call.set_state(true);
+          call.perform();
+
+light:
+  - platform: monochromatic
+    name: "Screen Light"
+    id: ha_light
+    output: ha_light_output
+    restore_mode: ALWAYS_ON
+    default_transition_length: 0s
+    flash_transition_length: 0s
+    gamma_correct: 1.0
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+globals:
+  - id: normal_wifi_connected
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_ha_added
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+  - id: normal_ha_api_connected
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ha_time_ready
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+  - id: normal_page_index
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_device_online_mask
+    type: int
+    restore_value: no
+    initial_value: '31'
+  - id: normal_device_selected_index
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_device_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_device_detail_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_device_detail_kind
+    type: int
+    restore_value: no
+    initial_value: 'NORMAL_DEVICE_DETAIL_KIND_NONE'
+  - id: normal_device_detail_index
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_device_detail_is_on
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_device_detail_online
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: normal_device_detail_light_brightness
+    type: int
+    restore_value: no
+    initial_value: '100'
+  - id: normal_device_detail_light_last_nonzero_brightness
+    type: int
+    restore_value: no
+    initial_value: '100'
+  - id: normal_detail_exit_switch_ready
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_detail_exit_light_ready
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_detail_light_mode
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_detail_light_mode_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_detail_light_mode_adjusting
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_detail_light_mode_rotated
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_light_cct_value_pct
+    type: int
+    restore_value: no
+    initial_value: '50'
+  - id: normal_light_rgb_value_pct
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_clear_wifi_allowed
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: normal_detail_exit_settings_ready
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_detail_exit_allowed
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_device_detail_curtain_feedback_position
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_device_detail_curtain_target_position
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_device_detail_curtain_adjust_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_device_detail_curtain_adjust_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_settings_selected_index
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_user_manual_qrcode_index
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_brightness_value
+    type: int
+    restore_value: yes
+    initial_value: '100'
+  - id: normal_knob_applied_value
+    type: int
+    restore_value: yes
+    initial_value: '2'
+  - id: normal_knob_pending_value
+    type: int
+    restore_value: no
+    initial_value: '2'
+  - id: normal_knob_event_pass
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: normal_knob_cw_accumulator
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_knob_ccw_accumulator
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: normal_backlight_applied_once
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ha_display_light_syncing
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: key_press_started_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: key_pressed
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: key_long_press_handled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: detail_long_press_exit_fired
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: normal_automation_press_feedback_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: hmi_switch_state
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: screen_off_state
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: sleep_mode_state
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: sleep_wakeup_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: standby_wakeup_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: standby_input_suppressed_until_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: key_last_release_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: ha_light_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ha_light_state
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ha_light_brightness
+    type: int
+    restore_value: no
+    initial_value: '50'
+  - id: ha_light_color_temp
+    type: int
+    restore_value: no
+    initial_value: '50'
+  - id: ha_light_selected_slider
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: standby_weather_entity_id
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: standby_weather_state
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: standby_weather_temperature
+    type: std::string
+    restore_value: no
+    initial_value: '"unknown"'
+  - id: standby_weather_temperature_unit
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: standby_weather_humidity
+    type: std::string
+    restore_value: no
+    initial_value: '"unknown"'
+
+image:
+  - file: "assets/guide_a.png"
+    id: guide_img_a
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/guide_b.png"
+    id: guide_img_b
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/wifi_ap.svg"
+    id: wifi_ap_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/homeassistant.svg"
+    id: homeassistant_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/icons_wifi_online.svg"
+    id: standby_wifi_online_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/icons_wifi_offline.svg"
+    id: standby_wifi_offline_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/icons_homeassistant_online.svg"
+    id: standby_homeassistant_online_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/icons_homeassistant_offline.svg"
+    id: standby_homeassistant_offline_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/vector.svg"
+    id: vector_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/icon_edit.svg"
+    id: icon_edit_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/emojione_monotone_digit_one.svg"
+    id: emojione_monotone_digit_one_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/emojione_monotone_digit_three.svg"
+    id: emojione_monotone_digit_three_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "assets/emojione_monotone_digit_two.svg"
+    id: emojione_monotone_digit_two_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_unknown.svg"
+    id: standby_weather_icon_unknown_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_clear-night.svg"
+    id: standby_weather_icon_clear_night_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_cloudy.svg"
+    id: standby_weather_icon_cloudy_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_exceptional.svg"
+    id: standby_weather_icon_exceptional_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_fog.svg"
+    id: standby_weather_icon_fog_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_hail.svg"
+    id: standby_weather_icon_hail_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_lightning.svg"
+    id: standby_weather_icon_lightning_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_lightning-rainy.svg"
+    id: standby_weather_icon_lightning_rainy_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_partlycloudy.svg"
+    id: standby_weather_icon_partlycloudy_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_pouring.svg"
+    id: standby_weather_icon_pouring_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_rainy.svg"
+    id: standby_weather_icon_rainy_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_snowy.svg"
+    id: standby_weather_icon_snowy_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_snowy-rainy.svg"
+    id: standby_weather_icon_snowy_rainy_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_sunny.svg"
+    id: standby_weather_icon_sunny_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_windy.svg"
+    id: standby_weather_icon_windy_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather/weather_windy-variant.svg"
+    id: standby_weather_icon_windy_variant_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather_icon_t.svg"
+    id: standby_weather_temp_icon_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/weather_icon_h.svg"
+    id: standby_weather_humidity_icon_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/plug_off.svg"
+    id: normal_device_icon_plug_off_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/device_list_plug.svg"
+    id: normal_device_icon_plug_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/device_list_plug_on.svg"
+    id: normal_device_icon_plug_on_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/plug_det_off.svg"
+    id: normal_device_detail_plug_off_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/device_list_light.svg"
+    id: normal_device_icon_light_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/device_list_light_on.svg"
+    id: normal_device_icon_light_on_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/device_list_curtain.svg"
+    id: normal_device_icon_curtain_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/device_list_curtain_open.svg"
+    id: normal_device_icon_curtain_open_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/device_list_curtain_closed.svg"
+    id: normal_device_icon_curtain_closed_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/settings.svg"
+    id: normal_device_icon_settings_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/ic_round-arrow-back-ios.svg"
+    id: normal_settings_arrow_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/ic_round_arrow_left.svg"
+    id: normal_user_manual_arrow_left_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/ic_round_arrow_right.svg"
+    id: normal_user_manual_arrow_right_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/UserManual_qrcode_1.png"
+    id: normal_user_manual_qrcode_wiki_img
+    type: RGB565
+  - file: "./assets/UserManual_qrcode_2.png"
+    id: normal_user_manual_qrcode_device_github_img
+    type: RGB565
+  - file: "./assets/UserManual_qrcode_3.png"
+    id: normal_user_manual_qrcode_firmware_github_img
+    type: RGB565
+  - file: "./assets/wifi_icon.svg"
+    id: normal_settings_wifi_icon_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/wifi_lock.svg"
+    id: normal_settings_wifi_lock_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/plug_det_on.svg"
+    id: normal_device_detail_plug_on_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/device_list_switch.svg"
+    id: normal_device_icon_switch_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/device_list_switch_on.svg"
+    id: normal_device_icon_switch_on_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/automation.svg"
+    id: normal_device_automation_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/automation_detail.svg"
+    id: normal_device_automation_detail_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/automation_detail_press.svg"
+    id: normal_device_automation_detail_press_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/switch_det_on.svg"
+    id: normal_device_detail_switch_on_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/switch_det_off.svg"
+    id: normal_device_detail_switch_off_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/light_det_on.svg"
+    id: normal_device_detail_light_on_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/light_det_off.svg"
+    id: normal_device_detail_light_off_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/light_cct_gradient.svg"
+    id: normal_light_cct_gradient_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/light_rgb_gradient.svg"
+    id: normal_light_rgb_gradient_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/light_mode_icon_bright.svg"
+    id: normal_light_mode_icon_bright_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/light_mode_icon_cct.svg"
+    id: normal_light_mode_icon_cct_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/light_mode_icon_color.svg"
+    id: normal_light_mode_icon_color_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/curtain_0%.svg"
+    id: normal_device_detail_curtain_0_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/curtain_100%.svg"
+    id: normal_device_detail_curtain_100_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/curtain_x%.svg"
+    id: normal_device_detail_curtain_x_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/curtain_opening.svg"
+    id: normal_device_detail_curtain_opening_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/curtain_pause.svg"
+    id: normal_device_detail_curtain_pause_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/curtain_closing.svg"
+    id: normal_device_detail_curtain_closing_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/curtain_no_opening.svg"
+    id: normal_device_detail_curtain_no_opening_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/curtain_no_pause.svg"
+    id: normal_device_detail_curtain_no_pause_img
+    type: RGB565
+    transparency: alpha_channel
+  - file: "./assets/curtain_no_closing.svg"
+    id: normal_device_detail_curtain_no_closing_img
+    type: RGB565
+    transparency: alpha_channel

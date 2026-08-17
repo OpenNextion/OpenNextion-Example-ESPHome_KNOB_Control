@@ -1,0 +1,4 @@
+# Normal mode feature package.
+# Keep the top-level entry thin; the implementation lives in split sub-files.
+
+!include_dir_merge_named normal_mode

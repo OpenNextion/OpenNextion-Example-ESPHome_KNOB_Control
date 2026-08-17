@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="37" height="37" viewBox="0 0 24 24">
+<style>
+  .rain { fill: #30b3ff; }
+  .sun { fill: #fdd93c; }
+  .moon { fill: #fcf497; }
+  .cloud-back { fill: #d4d4d4; }
+  .cloud-front { fill: #f9f9f9; }
+  .snow { fill: #f9f9f9; stroke: #d4d4d4; stroke-width: 1; paint-order: stroke; }
+  .unknown { fill: #d4d4d4; }
+  .exceptional { fill: #d4d4d4; }
+</style>
+<path class="exceptional" d="M11,15H13V17H11V15M11,7H13V13H11V7M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20Z"/>
+</svg>

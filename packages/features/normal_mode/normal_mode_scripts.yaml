@@ -1,0 +1,2095 @@
+script:
+  - id: enter_sleep_mode
+    mode: restart
+    then:
+      - lambda: |-
+          if (id(sleep_mode_state)) {
+            return;
+          }
+          id(sleep_mode_state) = true;
+          id(sleep_wakeup_pending) = false;
+      - switch.turn_on: ha_screen_off
+  - id: exit_sleep_mode
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(sleep_mode_state)) {
+            return;
+          }
+          id(sleep_mode_state) = false;
+          id(sleep_wakeup_pending) = false;
+      - switch.turn_off: ha_screen_off
+      - lambda: |-
+          id(ui_presenter)->notify_user_activity();
+  - id: exit_standby_mode
+    mode: restart
+    then:
+      - lambda: |-
+          id(standby_wakeup_pending) = false;
+      - switch.turn_off: ha_screen_off
+      - lambda: |-
+          id(ui_presenter)->notify_user_activity();
+  - id: refresh_normal_ha_connection_state
+    mode: restart
+    then:
+      - lambda: |-
+          const bool ha_connected =
+              id(api_server)->is_connected_with_state_subscription();
+          if (id(normal_ha_api_connected) == ha_connected) {
+            return;
+          }
+
+          id(normal_ha_api_connected) = ha_connected;
+          if (ha_connected) {
+            id(normal_ha_added) = true;
+          }
+
+          if (ha_connected) {
+            lv_obj_clear_flag(id(standby_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(standby_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          } else {
+            lv_obj_add_flag(id(standby_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(id(standby_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          }
+
+          if (id(ui_presenter)->is_normal_mode_active() &&
+              !id(ui_presenter)->is_standby_active() &&
+              id(normal_page_index) == 0 &&
+              !id(normal_device_detail_active)) {
+            id(show_normal_device_entry_page).execute(0);
+          }
+          id(refresh_normal_device_page).execute();
+          id(refresh_normal_switch_detail_page).execute();
+          id(refresh_normal_automation_detail_page).execute();
+          id(refresh_normal_light_detail_page).execute();
+          id(refresh_normal_curtain_detail_page).execute();
+  - id: refresh_normal_device_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              id(normal_page_index) != 0) {
+            lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+            return;
+          }
+
+          int total = id(normal_device_count);
+          if (total < 0) total = 0;
+          if (total > 10) total = 10;
+          const int last_selectable = total == 0 ? (id(normal_ha_added) ? 1 : 2) : total;
+
+          int selected = id(normal_device_selected_index);
+          if (selected < 0) selected = 0;
+          if (selected > last_selectable) selected = last_selectable;
+          id(normal_device_selected_index) = selected;
+
+          struct EntryWidgets {
+            lv_obj_t *icon_switch;
+            lv_obj_t *icon_switch_on;
+            lv_obj_t *icon_plug;
+            lv_obj_t *icon_plug_on;
+            lv_obj_t *icon_light;
+            lv_obj_t *icon_light_on;
+            lv_obj_t *icon_curtain;
+            lv_obj_t *icon_settings;
+            lv_obj_t *title;
+            lv_obj_t *index_icon;
+          };
+
+          auto set_hidden = [](lv_obj_t *obj, bool hidden) {
+            if (hidden) {
+              lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            } else {
+              lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            }
+          };
+
+          auto lower = [](std::string s) {
+            for (char &c : s) {
+              if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+            }
+            return s;
+          };
+
+          auto device_title_at = [&](int index) -> std::string {
+            const std::string device_entity_id = id(ui_presenter)->get_normal_device_entity_id(index);
+            std::string device_title = ha_entity_title_from_registry_cache(device_entity_id);
+            if (device_title.empty()) {
+              device_title = device_entity_id;
+            }
+            return device_title;
+          };
+
+          auto device_type_at = [&](int index) -> std::string {
+            return id(ui_presenter)->get_normal_device_type(index);
+          };
+
+          auto local_hmi_gpio_switch_state = [&](const std::string &entity_id, bool *state) -> bool {
+            switch (local_hmi_gpio_switch_io_from_entity_id(entity_id)) {
+              case 10:
+                *state = id(normal_gpio_io10).state;
+                return true;
+              case 11:
+                *state = id(normal_gpio_io11).state;
+                return true;
+              case 17:
+                *state = id(normal_gpio_io17).state;
+                return true;
+              case 18:
+                *state = id(normal_gpio_io18).state;
+                return true;
+              default:
+                return false;
+            }
+          };
+
+          auto render_entry = [&](EntryWidgets w, int entry_index) {
+            const bool settings_entry = entry_index >= total;
+            std::string device_title = settings_entry ? "Settings" : device_title_at(entry_index);
+            std::string device_type = settings_entry ? "settings" : device_type_at(entry_index);
+
+            int device_kind = 1;
+            if (settings_entry) {
+              device_kind = 5;
+            } else {
+              if (device_type.empty()) device_type = "switch";
+              device_type = lower(device_type);
+              if (device_type == "switch") {
+                device_kind = 1;
+              } else if (device_type == "plug" || device_type == "chazuo") {
+                device_kind = 3;
+              } else if (device_type == "light" || device_type == "liang" ||
+                         device_type == "dimming_light" || device_type == "dimmable_light" || device_type == "dimming") {
+                device_kind = 2;
+              } else if (device_type == "curtain" || device_type == "cover") {
+                device_kind = 4;
+              } else if (device_type == "automation") {
+                device_kind = 10;
+              }
+            }
+
+            if (!settings_entry && device_title.empty()) {
+              if (device_kind == 1) {
+                device_title = "switch";
+              } else if (device_kind == 3) {
+                device_title = "plug";
+              } else if (device_kind == 4) {
+                device_title = "curtain";
+              } else if (device_kind == 10) {
+                device_title = "automation";
+              } else {
+                device_title = "light";
+              }
+            }
+
+            set_hidden(w.icon_switch, !(device_kind == 1 || device_kind == 10));
+            set_hidden(w.icon_switch_on, true);
+            set_hidden(w.icon_plug, device_kind != 3);
+            set_hidden(w.icon_plug_on, true);
+            set_hidden(w.icon_light, !(device_kind == 2 || device_kind == 7));
+            set_hidden(w.icon_light_on, true);
+            set_hidden(w.icon_curtain, device_kind != 4);
+            set_hidden(w.icon_settings, device_kind != 5);
+            lv_img_set_src(w.icon_switch,
+                           device_kind == 10 ? id(normal_device_automation_img)
+                                             : id(normal_device_icon_switch_img));
+            if (device_kind == 4 && !settings_entry) {
+              const uint8_t curtain_position = id(app_storage)->get_normal_ui_device_position(entry_index);
+              if (curtain_position >= 100) {
+                lv_img_set_src(w.icon_curtain, id(normal_device_icon_curtain_open_img));
+              } else if (curtain_position == 0) {
+                lv_img_set_src(w.icon_curtain, id(normal_device_icon_curtain_closed_img));
+              } else {
+                lv_img_set_src(w.icon_curtain, id(normal_device_icon_curtain_img));
+              }
+            } else {
+              lv_img_set_src(w.icon_curtain, id(normal_device_icon_curtain_img));
+            }
+
+            if (!settings_entry && (device_kind == 1 || device_kind == 3 || device_kind == 2 || device_kind == 7)) {
+              bool local_state = false;
+              if (device_kind == 1 && local_hmi_gpio_switch_state(id(ui_presenter)->get_normal_device_entity_id(entry_index), &local_state)) {
+                id(app_storage)->set_normal_ui_device_state(entry_index, local_state);
+              }
+              bool is_on = id(app_storage)->get_normal_ui_device_state(entry_index);
+              if (device_kind == 1) {
+                set_hidden(w.icon_switch, is_on);
+                set_hidden(w.icon_switch_on, !is_on);
+              } else if (device_kind == 3) {
+                set_hidden(w.icon_plug, is_on);
+                set_hidden(w.icon_plug_on, !is_on);
+              } else {
+                set_hidden(w.icon_light, is_on);
+                set_hidden(w.icon_light_on, !is_on);
+              }
+            }
+
+            lv_label_set_text(w.title, device_title.c_str());
+            if (settings_entry) {
+              set_hidden(id(normal_device_index_text), true);
+              set_hidden(w.index_icon, false);
+            } else {
+              char index_text[16];
+              snprintf(index_text, sizeof(index_text), "%d/%d", entry_index + 1, total);
+              lv_label_set_text(id(normal_device_index_text), index_text);
+              set_hidden(id(normal_device_index_text), false);
+              set_hidden(w.index_icon, true);
+            }
+          };
+
+          if (total == 0 && selected == 0) {
+            set_hidden(id(normal_device_wifi_online_widget), true);
+            set_hidden(id(normal_device_wifi_offline_widget), true);
+            set_hidden(id(normal_device_homeassistant_online_widget), true);
+            set_hidden(id(normal_device_homeassistant_offline_widget), true);
+            set_hidden(id(normal_device_index_text), true);
+            return;
+          }
+          set_hidden(id(normal_device_wifi_online_widget), !id(normal_wifi_connected));
+          set_hidden(id(normal_device_wifi_offline_widget), id(normal_wifi_connected));
+          set_hidden(id(normal_device_homeassistant_online_widget), !id(normal_ha_api_connected));
+          set_hidden(id(normal_device_homeassistant_offline_widget), id(normal_ha_api_connected));
+          if (selected >= total) {
+            render_entry({id(normal_device_settings_icon_switch), id(normal_device_settings_icon_switch_on), id(normal_device_settings_icon_plug), id(normal_device_settings_icon_plug_on), id(normal_device_settings_icon_light), id(normal_device_settings_icon_light_on), id(normal_device_settings_icon_curtain), id(normal_device_settings_icon_settings), id(normal_device_settings_title), id(normal_device_settings_index_icon)}, selected);
+          } else {
+            switch (selected) {
+              case 0:
+                render_entry({id(normal_device_0_icon_switch), id(normal_device_0_icon_switch_on), id(normal_device_0_icon_plug), id(normal_device_0_icon_plug_on), id(normal_device_0_icon_light), id(normal_device_0_icon_light_on), id(normal_device_0_icon_curtain), id(normal_device_0_icon_settings), id(normal_device_0_title), id(normal_device_0_index_icon)}, 0);
+                break;
+              case 1:
+                render_entry({id(normal_device_1_icon_switch), id(normal_device_1_icon_switch_on), id(normal_device_1_icon_plug), id(normal_device_1_icon_plug_on), id(normal_device_1_icon_light), id(normal_device_1_icon_light_on), id(normal_device_1_icon_curtain), id(normal_device_1_icon_settings), id(normal_device_1_title), id(normal_device_1_index_icon)}, 1);
+                break;
+              case 2:
+                render_entry({id(normal_device_2_icon_switch), id(normal_device_2_icon_switch_on), id(normal_device_2_icon_plug), id(normal_device_2_icon_plug_on), id(normal_device_2_icon_light), id(normal_device_2_icon_light_on), id(normal_device_2_icon_curtain), id(normal_device_2_icon_settings), id(normal_device_2_title), id(normal_device_2_index_icon)}, 2);
+                break;
+              case 3:
+                render_entry({id(normal_device_3_icon_switch), id(normal_device_3_icon_switch_on), id(normal_device_3_icon_plug), id(normal_device_3_icon_plug_on), id(normal_device_3_icon_light), id(normal_device_3_icon_light_on), id(normal_device_3_icon_curtain), id(normal_device_3_icon_settings), id(normal_device_3_title), id(normal_device_3_index_icon)}, 3);
+                break;
+              case 4:
+                render_entry({id(normal_device_4_icon_switch), id(normal_device_4_icon_switch_on), id(normal_device_4_icon_plug), id(normal_device_4_icon_plug_on), id(normal_device_4_icon_light), id(normal_device_4_icon_light_on), id(normal_device_4_icon_curtain), id(normal_device_4_icon_settings), id(normal_device_4_title), id(normal_device_4_index_icon)}, 4);
+                break;
+              case 5:
+                render_entry({id(normal_device_5_icon_switch), id(normal_device_5_icon_switch_on), id(normal_device_5_icon_plug), id(normal_device_5_icon_plug_on), id(normal_device_5_icon_light), id(normal_device_5_icon_light_on), id(normal_device_5_icon_curtain), id(normal_device_5_icon_settings), id(normal_device_5_title), id(normal_device_5_index_icon)}, 5);
+                break;
+              case 6:
+                render_entry({id(normal_device_6_icon_switch), id(normal_device_6_icon_switch_on), id(normal_device_6_icon_plug), id(normal_device_6_icon_plug_on), id(normal_device_6_icon_light), id(normal_device_6_icon_light_on), id(normal_device_6_icon_curtain), id(normal_device_6_icon_settings), id(normal_device_6_title), id(normal_device_6_index_icon)}, 6);
+                break;
+              case 7:
+                render_entry({id(normal_device_7_icon_switch), id(normal_device_7_icon_switch_on), id(normal_device_7_icon_plug), id(normal_device_7_icon_plug_on), id(normal_device_7_icon_light), id(normal_device_7_icon_light_on), id(normal_device_7_icon_curtain), id(normal_device_7_icon_settings), id(normal_device_7_title), id(normal_device_7_index_icon)}, 7);
+                break;
+              case 8:
+                render_entry({id(normal_device_8_icon_switch), id(normal_device_8_icon_switch_on), id(normal_device_8_icon_plug), id(normal_device_8_icon_plug_on), id(normal_device_8_icon_light), id(normal_device_8_icon_light_on), id(normal_device_8_icon_curtain), id(normal_device_8_icon_settings), id(normal_device_8_title), id(normal_device_8_index_icon)}, 8);
+                break;
+              default:
+                render_entry({id(normal_device_9_icon_switch), id(normal_device_9_icon_switch_on), id(normal_device_9_icon_plug), id(normal_device_9_icon_plug_on), id(normal_device_9_icon_light), id(normal_device_9_icon_light_on), id(normal_device_9_icon_curtain), id(normal_device_9_icon_settings), id(normal_device_9_title), id(normal_device_9_index_icon)}, 9);
+                break;
+            }
+          }
+
+  - id: show_normal_device_entry_page
+    mode: restart
+    parameters:
+      direction: int
+    then:
+      - script.execute: refresh_normal_device_page
+      - lambda: |-
+          int total = id(normal_device_count);
+          if (total < 0) total = 0;
+          if (total > 10) total = 10;
+          const int last_selectable = total == 0 ? (id(normal_ha_added) ? 1 : 2) : total;
+          int selected = id(normal_device_selected_index);
+          if (selected < 0) selected = 0;
+          if (selected > last_selectable) selected = last_selectable;
+          id(normal_device_selected_index) = selected;
+
+          lv_obj_t *target = id(device_settings)->obj;
+          if (total == 0 && selected == 0) {
+            target = id(normal_ha_added) ? id(device_empty)->obj : id(normal_add_hmi_page)->obj;
+          } else if (total == 0 && !id(normal_ha_added) && selected == 1) {
+            target = id(normal_add_hmi_hello_page)->obj;
+          } else if (selected < total) {
+            switch (selected) {
+              case 0: target = id(device_0)->obj; break;
+              case 1: target = id(device_1)->obj; break;
+              case 2: target = id(device_2)->obj; break;
+              case 3: target = id(device_3)->obj; break;
+              case 4: target = id(device_4)->obj; break;
+              case 5: target = id(device_5)->obj; break;
+              case 6: target = id(device_6)->obj; break;
+              case 7: target = id(device_7)->obj; break;
+              case 8: target = id(device_8)->obj; break;
+              default: target = id(device_9)->obj; break;
+            }
+          }
+
+          if (lv_scr_act() == target) {
+            return;
+          }
+          if (direction == 0) {
+            lv_scr_load(target);
+            return;
+          }
+          lv_scr_load_anim(target,
+                           direction > 0 ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_MOVE_RIGHT,
+                           220, 0, false);
+
+  - id: refresh_normal_switch_detail_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              (id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SWITCH &&
+               id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_PLUG)) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+
+          int detail_index = id(normal_device_detail_index);
+          if (detail_index < 0) {
+            detail_index = 0;
+          }
+          if (detail_index > 9) {
+            detail_index = 9;
+          }
+
+          const std::string device_entity_id = id(ui_presenter)->get_normal_device_entity_id(detail_index);
+          std::string device_title = ha_entity_title_from_registry_cache(device_entity_id);
+          if (device_title.empty()) {
+            device_title = device_entity_id;
+          }
+
+          auto local_hmi_gpio_switch_state = [&](const std::string &entity_id, bool *state) -> bool {
+            switch (local_hmi_gpio_switch_io_from_entity_id(entity_id)) {
+              case 10:
+                *state = id(normal_gpio_io10).state;
+                return true;
+              case 11:
+                *state = id(normal_gpio_io11).state;
+                return true;
+              case 17:
+                *state = id(normal_gpio_io17).state;
+                return true;
+              case 18:
+                *state = id(normal_gpio_io18).state;
+                return true;
+              default:
+                return false;
+            }
+          };
+
+          bool is_on = id(app_storage)->get_normal_ui_device_state(detail_index);
+          const bool is_local_gpio_switch = local_hmi_gpio_switch_state(device_entity_id, &is_on);
+          if (is_local_gpio_switch) {
+            id(app_storage)->set_normal_ui_device_state(detail_index, is_on);
+          }
+          id(normal_device_detail_is_on) = is_on;
+          std::string state_text = is_on ? "ON" : "OFF";
+
+          lv_obj_t *page = id(normal_switch_page)->obj;
+          lv_obj_t *shell = id(normal_switch_detail_shell);
+          auto set_hidden = [](lv_obj_t *obj, bool hidden) {
+            if (hidden) {
+              lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            } else {
+              lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            }
+          };
+
+          if (is_on) {
+            lv_obj_set_style_bg_color(page, lv_color_hex(0x54524F), 0);
+            lv_obj_set_style_bg_color(shell, lv_color_hex(0x54524F), 0);
+            lv_obj_set_style_border_width(shell, 0, 0);
+            lv_obj_set_style_text_color(id(normal_switch_detail_state), lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_text_color(id(normal_switch_detail_title), lv_color_hex(0xFFFFFF), 0);
+          } else {
+            lv_obj_set_style_bg_color(page, lv_color_hex(0x272727), 0);
+            lv_obj_set_style_bg_color(shell, lv_color_hex(0x272727), 0);
+            lv_obj_set_style_border_width(shell, 0, 0);
+            lv_obj_set_style_text_color(id(normal_switch_detail_state), lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_text_color(id(normal_switch_detail_title), lv_color_hex(0xD2D2D2), 0);
+          }
+          if (id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SWITCH) {
+            set_hidden(id(normal_device_detail_plug_on), true);
+            set_hidden(id(normal_device_detail_plug_off), true);
+            set_hidden(id(normal_device_detail_light_on), true);
+            set_hidden(id(normal_device_detail_light_off), true);
+            set_hidden(id(normal_device_detail_switch_on), !is_on);
+            set_hidden(id(normal_device_detail_switch_off), is_on);
+          } else if (id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_PLUG) {
+            set_hidden(id(normal_device_detail_plug_on), !is_on);
+            set_hidden(id(normal_device_detail_plug_off), is_on);
+            set_hidden(id(normal_device_detail_light_on), true);
+            set_hidden(id(normal_device_detail_light_off), true);
+            set_hidden(id(normal_device_detail_switch_on), true);
+            set_hidden(id(normal_device_detail_switch_off), true);
+          }
+
+          lv_label_set_text(id(normal_switch_detail_state), state_text.c_str());
+          lv_label_set_text(id(normal_switch_detail_title), device_title.c_str());
+          lv_obj_t *sw = id(hmi_gui_switch);
+          if (is_on) {
+            lv_obj_add_state(sw, LV_STATE_CHECKED);
+          } else {
+            lv_obj_clear_state(sw, LV_STATE_CHECKED);
+          }
+          const bool is_online = is_local_gpio_switch ||
+                                 ((detail_index >= 0 && detail_index < 10)
+                                      ? ((id(normal_device_online_mask) & (1 << detail_index)) != 0)
+                                      : true);
+          id(normal_device_detail_online) = is_online;
+          const bool show_connection_overlay = !is_local_gpio_switch &&
+                                               (!id(normal_wifi_connected) ||
+                                               !id(normal_ha_api_connected) ||
+                                               !is_online);
+          set_hidden(id(normal_switch_detail_offline_overlay), !show_connection_overlay);
+          const char *offline_text = !id(normal_wifi_connected)
+                                         ? "WiFi disconnected"
+                                         : (!id(normal_ha_api_connected) ? "Home Assistant\ndisconnected" : "Device Offline");
+          lv_label_set_text(id(normal_switch_detail_offline_text), offline_text);
+
+  - id: refresh_normal_automation_detail_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_AUTOMATION) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+          int detail_index = std::clamp(id(normal_device_detail_index), 0, 9);
+          const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(detail_index);
+          std::string title = ha_entity_title_from_registry_cache(entity_id);
+          if (title.empty()) {
+            title = entity_id.empty() ? "Automation" : entity_id;
+          }
+          lv_label_set_text(id(normal_automation_detail_title), title.c_str());
+          std::string last_trigger_text = "Never";
+          const auto now = id(ha_time).now();
+          if (now.is_valid()) {
+            last_trigger_text = custom_logic_entity_sub::automation_last_triggered_relative_text(
+                detail_index, entity_id, now.timestamp);
+          }
+          lv_label_set_text(id(normal_automation_detail_action), last_trigger_text.c_str());
+          lv_img_set_src(id(normal_automation_detail_icon),
+                         id(normal_automation_press_feedback_active)
+                             ? id(normal_device_automation_detail_press_img)
+                             : id(normal_device_automation_detail_img));
+
+          const bool is_online = (id(normal_device_online_mask) & (1 << detail_index)) != 0;
+          id(normal_device_detail_online) = is_online;
+          const bool show_connection_overlay =
+              !id(normal_wifi_connected) || !id(normal_ha_api_connected) || !is_online;
+          if (show_connection_overlay) {
+            lv_obj_clear_flag(id(normal_automation_detail_offline_overlay), LV_OBJ_FLAG_HIDDEN);
+          } else {
+            lv_obj_add_flag(id(normal_automation_detail_offline_overlay), LV_OBJ_FLAG_HIDDEN);
+          }
+          const char *offline_text = !id(normal_wifi_connected)
+                                         ? "WiFi disconnected"
+                                         : (!id(normal_ha_api_connected)
+                                                ? "Home Assistant\ndisconnected"
+                                                : "Device Offline");
+          lv_label_set_text(id(normal_automation_detail_offline_text), offline_text);
+
+  - id: refresh_normal_light_detail_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_LIGHT) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+
+          int detail_index = id(normal_device_detail_index);
+          if (detail_index < 0) {
+            detail_index = 0;
+          }
+          if (detail_index > 9) {
+            detail_index = 9;
+          }
+
+          const std::string device_entity_id = id(ui_presenter)->get_normal_device_entity_id(detail_index);
+          std::string device_title = ha_entity_title_from_registry_cache(device_entity_id);
+          if (device_title.empty()) {
+            device_title = device_entity_id;
+          }
+
+          auto detail_slot = id(app_storage)->normal_device_slot(detail_index);
+          auto light_state = detail_slot.light();
+          bool is_on = light_state.is_on;
+          int brightness = (int) light_state.brightness_pct;
+          if (brightness < 0) brightness = 0;
+          if (brightness > 100) brightness = 100;
+          const int displayed_brightness = is_on ? brightness : 0;
+          int last_nonzero = (int) light_state.last_nonzero_brightness_pct;
+          if (last_nonzero < 1 || last_nonzero > 100) last_nonzero = 100;
+          const bool brightness_capable = light_state.custom_supports_brightness();
+          if (id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT && brightness_capable) {
+            if (is_on && brightness <= 0) {
+              brightness = last_nonzero;
+              if (brightness < 1 || brightness > 100) brightness = 100;
+              esphome::onx_storage::NormalLightStatePatch patch{};
+              patch.has_brightness_pct = true;
+              patch.brightness_pct = static_cast<uint8_t>(brightness);
+              detail_slot.update_light(patch);
+            }
+            if (brightness > 0) {
+              last_nonzero = brightness;
+              esphome::onx_storage::NormalLightStatePatch patch{};
+              patch.has_brightness_pct = true;
+              patch.brightness_pct = static_cast<uint8_t>(last_nonzero);
+              detail_slot.update_light(patch);
+            }
+          }
+          id(normal_device_detail_light_brightness) = displayed_brightness;
+          id(normal_device_detail_light_last_nonzero_brightness) = last_nonzero;
+          id(normal_device_detail_is_on) = is_on;
+          std::string state_text = is_on ? "ON" : "OFF";
+          if (id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT && brightness_capable) {
+            state_text = is_on ? (std::to_string(displayed_brightness) + "%") : "OFF";
+          }
+
+          lv_obj_t *page = id(normal_light_page)->obj;
+          lv_obj_t *shell = id(normal_light_detail_shell);
+          auto set_hidden = [](lv_obj_t *obj, bool hidden) {
+            if (hidden) {
+              lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            } else {
+              lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            }
+          };
+
+          if (is_on) {
+            lv_obj_set_style_bg_color(page, lv_color_hex(0x54524F), 0);
+            lv_obj_set_style_bg_color(shell, lv_color_hex(0x54524F), 0);
+            lv_obj_set_style_border_width(shell, 0, 0);
+            lv_obj_set_style_text_color(id(normal_light_detail_state), lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_text_color(id(normal_light_detail_title), lv_color_hex(0xFFFFFF), 0);
+          } else {
+            lv_obj_set_style_bg_color(page, lv_color_hex(0x272727), 0);
+            lv_obj_set_style_bg_color(shell, lv_color_hex(0x272727), 0);
+            lv_obj_set_style_border_width(shell, 0, 0);
+            lv_obj_set_style_text_color(id(normal_light_detail_state), lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_text_color(id(normal_light_detail_title), lv_color_hex(0xD2D2D2), 0);
+          }
+
+          set_hidden(id(normal_light_device_detail_switch_on), true);
+          set_hidden(id(normal_light_device_detail_switch_off), true);
+          set_hidden(id(normal_light_device_detail_plug_on), true);
+          set_hidden(id(normal_light_device_detail_plug_off), true);
+          set_hidden(id(normal_light_device_detail_light_on), !is_on);
+          set_hidden(id(normal_light_device_detail_light_off), is_on);
+
+          lv_label_set_text(id(normal_light_detail_state), state_text.c_str());
+          lv_label_set_text(id(normal_light_detail_title), device_title.c_str());
+          const bool is_light = id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT;
+          auto is_mode_enabled = [&](int mode) -> bool {
+            if (mode == 0) {
+              return light_state.custom_supports_brightness();
+            }
+            if (mode == 1) {
+              return light_state.custom_supports_color_temperature();
+            }
+            if (mode == 2) {
+              return light_state.custom_supports_rgb();
+            }
+            return false;
+          };
+          const bool mode_0_enabled = is_mode_enabled(0);
+          const bool mode_1_enabled = is_mode_enabled(1);
+          const bool mode_2_enabled = is_mode_enabled(2);
+          int mode_count = 0;
+          for (int i = 0; i < 3; ++i) {
+            if (is_mode_enabled(i)) {
+              mode_count++;
+            }
+          }
+          id(normal_detail_light_mode_count) = mode_count;
+          const bool has_adjustable_mode = mode_count > 0;
+          const bool mode_switching = is_light && has_adjustable_mode && !id(normal_clear_wifi_allowed);
+          auto set_mode_shell_layout = [&]() {
+            if (mode_switching) {
+              lv_obj_set_pos(id(normal_light_detail_mode_text_shell), 0, 165);
+              lv_obj_set_size(id(normal_light_detail_mode_text_shell), 90, 26);
+            } else {
+              lv_obj_set_pos(id(normal_light_detail_mode_text_shell), 0, 166);
+              lv_obj_set_size(id(normal_light_detail_mode_text_shell), 90, 23);
+            }
+          };
+          auto set_mode_icon_visual = [&](lv_obj_t *icon, lv_obj_t *img, bool active) {
+            const int size = mode_switching ? (active ? 26 : 23) : 20;
+            const uint16_t zoom = mode_switching ? (active ? 333 : 295) : 256;
+            lv_obj_set_size(icon, size, size);
+            lv_obj_set_style_radius(icon, size / 2, 0);
+            lv_img_set_zoom(img, zoom);
+            lv_img_set_pivot(img, 10, 10);
+            lv_img_set_antialias(img, true);
+            lv_obj_set_style_border_width(icon, active ? 3 : 0, 0);
+            lv_obj_set_style_border_color(icon, lv_color_hex(0xFFFFFF), 0);
+          };
+          if (!is_mode_enabled(id(normal_detail_light_mode))) {
+            for (int mode = 0; mode < 3; ++mode) {
+              if (is_mode_enabled(mode)) {
+                id(normal_detail_light_mode) = mode;
+                break;
+              }
+            }
+          }
+          set_mode_shell_layout();
+          set_hidden(id(normal_light_detail_mode_text_shell), !is_light || !has_adjustable_mode);
+          set_hidden(id(normal_light_detail_mode_icon_brightness), !is_light || !mode_0_enabled);
+          set_hidden(id(normal_light_detail_mode_icon_cct), !is_light || !mode_1_enabled);
+          set_hidden(id(normal_light_detail_mode_icon_color), !is_light || !mode_2_enabled);
+          set_mode_icon_visual(id(normal_light_detail_mode_icon_brightness), id(normal_light_detail_mode_icon_brightness_img),
+                               is_light && mode_0_enabled && id(normal_detail_light_mode) == 0);
+          set_mode_icon_visual(id(normal_light_detail_mode_icon_cct), id(normal_light_detail_mode_icon_cct_img),
+                               is_light && mode_1_enabled && id(normal_detail_light_mode) == 1);
+          set_mode_icon_visual(id(normal_light_detail_mode_icon_color), id(normal_light_detail_mode_icon_color_img),
+                               is_light && mode_2_enabled && id(normal_detail_light_mode) == 2);
+
+          const bool show_cct_bar = is_light && mode_1_enabled && id(normal_detail_light_mode) == 1;
+          const bool show_rgb_bar = is_light && mode_2_enabled && id(normal_detail_light_mode) == 2;
+          set_hidden(id(normal_light_dimming_light_detail_arc),
+                     !is_light || !mode_0_enabled || id(normal_detail_light_mode) != 0);
+          if (is_light && mode_0_enabled) {
+            lv_arc_set_value(id(normal_light_dimming_light_detail_arc), std::clamp(displayed_brightness, 0, 100));
+          }
+          lv_obj_t *sw = id(hmi_gui_switch);
+          if (is_on) {
+            lv_obj_add_state(sw, LV_STATE_CHECKED);
+          } else {
+            lv_obj_clear_state(sw, LV_STATE_CHECKED);
+          }
+          const bool is_online = (detail_index >= 0 && detail_index < 10)
+                                     ? ((id(normal_device_online_mask) & (1 << detail_index)) != 0)
+                                     : true;
+          id(normal_device_detail_online) = is_online;
+          const bool show_connection_overlay = !id(normal_wifi_connected) ||
+                                               !id(normal_ha_api_connected) ||
+                                               !is_online;
+          set_hidden(id(normal_light_detail_offline_overlay), !show_connection_overlay);
+          const char *offline_text = !id(normal_wifi_connected)
+                                         ? "WiFi disconnected"
+                                         : (!id(normal_ha_api_connected) ? "Home Assistant\ndisconnected" : "Device Offline");
+          lv_label_set_text(id(normal_light_detail_offline_text), offline_text);
+
+          set_hidden(id(normal_light_cct_gradient), !show_cct_bar);
+          set_hidden(id(normal_light_rgb_gradient), !show_rgb_bar);
+          set_hidden(id(normal_light_cct_value_arc), !show_cct_bar);
+          set_hidden(id(normal_light_rgb_value_arc), !show_rgb_bar);
+          lv_obj_set_style_img_opa(id(normal_light_cct_gradient), is_on ? LV_OPA_COVER : LV_OPA_40, 0);
+          lv_obj_set_style_img_opa(id(normal_light_rgb_gradient), is_on ? LV_OPA_COVER : LV_OPA_40, 0);
+          if (show_cct_bar) {
+            int value_pct = std::clamp<int>(detail_slot.light().color_temperature_step(), 0, 10);
+            id(normal_light_cct_value_pct) = value_pct;
+            lv_arc_set_value(id(normal_light_cct_value_arc), value_pct);
+          }
+          if (show_rgb_bar) {
+            int value_pct = (int) detail_slot.light().rgb_tick;
+            value_pct = std::clamp(value_pct, 0, 35);
+            id(normal_light_rgb_value_pct) = value_pct;
+            lv_arc_set_value(id(normal_light_rgb_value_arc), value_pct);
+          }
+
+  - id: update_normal_detail_exit_ready_flags
+    mode: restart
+    then:
+      - lambda: |-
+          const uint32_t held_ms = millis() - id(key_press_started_ms);
+          const int kind = id(normal_device_detail_kind);
+          if (kind == NORMAL_DEVICE_DETAIL_KIND_SWITCH || kind == NORMAL_DEVICE_DETAIL_KIND_PLUG || kind == NORMAL_DEVICE_DETAIL_KIND_AUTOMATION) {
+            id(normal_detail_exit_switch_ready) = held_ms >= 688;
+            id(normal_detail_exit_light_ready) = false;
+            id(normal_detail_exit_settings_ready) = false;
+          } else if (kind == NORMAL_DEVICE_DETAIL_KIND_CURTAIN) {
+            id(normal_detail_exit_switch_ready) = held_ms >= 688;
+            id(normal_detail_exit_light_ready) = false;
+            id(normal_detail_exit_settings_ready) = false;
+          } else if (kind == NORMAL_DEVICE_DETAIL_KIND_LIGHT) {
+            id(normal_detail_exit_switch_ready) = false;
+            id(normal_detail_exit_light_ready) = held_ms >= 688;
+            id(normal_detail_exit_settings_ready) = false;
+          } else if (kind == NORMAL_DEVICE_DETAIL_KIND_DIMMING_LIGHT) {
+            id(normal_detail_exit_switch_ready) = false;
+            id(normal_detail_exit_light_ready) = held_ms >= 688;
+            id(normal_detail_exit_settings_ready) = false;
+          } else if (kind == NORMAL_DEVICE_DETAIL_KIND_SETTINGS || kind == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_WIFI || kind == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS || kind == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB || kind == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL || kind == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL_QR_CODE) {
+            id(normal_detail_exit_switch_ready) = false;
+            id(normal_detail_exit_light_ready) = false;
+            id(normal_detail_exit_settings_ready) = held_ms >= 688;
+          } else {
+            id(normal_detail_exit_switch_ready) = false;
+            id(normal_detail_exit_light_ready) = false;
+            id(normal_detail_exit_settings_ready) = false;
+          }
+
+  - id: can_exit_normal_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(normal_device_detail_active)) {
+            id(normal_detail_exit_allowed) = false;
+            return;
+          }
+          switch (id(normal_device_detail_kind)) {
+            case NORMAL_DEVICE_DETAIL_KIND_SWITCH:
+            case NORMAL_DEVICE_DETAIL_KIND_PLUG:
+            case NORMAL_DEVICE_DETAIL_KIND_CURTAIN:
+            case NORMAL_DEVICE_DETAIL_KIND_AUTOMATION:
+              id(normal_detail_exit_allowed) = id(normal_detail_exit_switch_ready);
+              break;
+            case NORMAL_DEVICE_DETAIL_KIND_LIGHT:
+              id(normal_detail_exit_allowed) = id(normal_detail_exit_light_ready);
+              break;
+            case NORMAL_DEVICE_DETAIL_KIND_DIMMING_LIGHT:
+              id(normal_detail_exit_allowed) = id(normal_detail_exit_light_ready);
+              break;
+            case NORMAL_DEVICE_DETAIL_KIND_SETTINGS:
+            case NORMAL_DEVICE_DETAIL_KIND_SETTINGS_WIFI:
+            case NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS:
+            case NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB:
+            case NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL:
+            case NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL_QR_CODE:
+              id(normal_detail_exit_allowed) = id(normal_detail_exit_settings_ready);
+              break;
+            default:
+              id(normal_detail_exit_allowed) = false;
+              break;
+          }
+
+  - id: refresh_normal_curtain_detail_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_CURTAIN) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+
+          int detail_index = id(normal_device_detail_index);
+          if (detail_index < 0) {
+            detail_index = 0;
+          }
+          if (detail_index > 9) {
+            detail_index = 9;
+          }
+
+          const std::string device_entity_id = id(ui_presenter)->get_normal_device_entity_id(detail_index);
+          std::string device_title = ha_entity_title_from_registry_cache(device_entity_id);
+          if (device_title.empty()) {
+            device_title = device_entity_id;
+          }
+
+          if (!id(normal_device_detail_curtain_adjust_active)) {
+            const int storage_position = std::clamp((int) id(app_storage)->get_normal_ui_device_position(detail_index), 0, 100);
+            id(normal_device_detail_curtain_feedback_position) = storage_position;
+            id(normal_device_detail_curtain_target_position) = storage_position;
+          }
+
+          int display_position = id(normal_device_detail_curtain_feedback_position);
+          display_position = std::clamp(display_position, 0, 100);
+
+          auto set_hidden = [](lv_obj_t *obj, bool hidden) {
+            if (hidden) {
+              lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            } else {
+              lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            }
+          };
+
+          lv_obj_t *page = id(normal_curtain_page)->obj;
+          lv_obj_t *shell = id(normal_curtain_detail_shell);
+          lv_obj_t *arc = id(normal_curtain_detail_arc);
+          lv_obj_t *target_arc = id(normal_curtain_detail_target_arc);
+          lv_obj_set_style_bg_color(page, lv_color_hex(0x000000), 0);
+          lv_obj_set_style_bg_color(shell, lv_color_hex(0x232323), 0);
+          lv_obj_set_style_border_width(shell, 0, 0);
+          lv_arc_set_value(arc, display_position);
+          const int target_position = std::clamp(id(normal_device_detail_curtain_target_position), 0, 100);
+          lv_arc_set_value(target_arc, target_position);
+          set_hidden(id(normal_curtain_detail_target_arc), !id(normal_device_detail_curtain_adjust_active));
+
+          set_hidden(id(normal_curtain_detail_0_img), true);
+          set_hidden(id(normal_curtain_detail_100_img), true);
+          set_hidden(id(normal_curtain_detail_x_img), true);
+          if (display_position <= 0) {
+            set_hidden(id(normal_curtain_detail_0_img), false);
+          } else if (display_position >= 100) {
+            set_hidden(id(normal_curtain_detail_100_img), false);
+          } else {
+            set_hidden(id(normal_curtain_detail_x_img), false);
+          }
+
+          set_hidden(id(normal_curtain_detail_opening_on), true);
+          set_hidden(id(normal_curtain_detail_opening_off), false);
+          set_hidden(id(normal_curtain_detail_pause_on), true);
+          set_hidden(id(normal_curtain_detail_pause_off), false);
+          set_hidden(id(normal_curtain_detail_closing_on), true);
+          set_hidden(id(normal_curtain_detail_closing_off), false);
+
+          std::string state_text = std::to_string(display_position) + "%";
+          const uint32_t curtain_state_code = id(app_storage)->get_normal_ui_device_extra_u32(detail_index, 2);
+          if (curtain_state_code == 3) {
+            state_text = "Opening";
+            set_hidden(id(normal_curtain_detail_opening_on), false);
+            set_hidden(id(normal_curtain_detail_opening_off), true);
+            set_hidden(id(normal_curtain_detail_pause_on), true);
+            set_hidden(id(normal_curtain_detail_pause_off), false);
+          } else if (curtain_state_code == 4) {
+            state_text = "Closing";
+            set_hidden(id(normal_curtain_detail_closing_on), false);
+            set_hidden(id(normal_curtain_detail_closing_off), true);
+            set_hidden(id(normal_curtain_detail_pause_on), true);
+            set_hidden(id(normal_curtain_detail_pause_off), false);
+          } else {
+            set_hidden(id(normal_curtain_detail_pause_on), false);
+            set_hidden(id(normal_curtain_detail_pause_off), true);
+          }
+          if (display_position >= 100) {
+            state_text = "Open";
+          } else if (display_position <= 0) {
+            state_text = "Closed";
+          }
+          if (id(normal_device_detail_curtain_adjust_active) || 
+          (curtain_state_code == 3 || curtain_state_code == 4)) {
+            state_text += " -> " + std::to_string(target_position) + "%";
+          }
+
+          lv_label_set_text(id(normal_curtain_detail_state), state_text.c_str());
+          lv_label_set_text(id(normal_curtain_detail_title), device_title.c_str());
+          const bool is_online = (detail_index >= 0 && detail_index < 10)
+                                     ? ((id(normal_device_online_mask) & (1 << detail_index)) != 0)
+                                     : true;
+          id(normal_device_detail_online) = is_online;
+          const bool show_connection_overlay = !id(normal_wifi_connected) ||
+                                               !id(normal_ha_api_connected) ||
+                                               !is_online;
+          set_hidden(id(normal_curtain_detail_offline_overlay), !show_connection_overlay);
+          const char *offline_text = !id(normal_wifi_connected)
+                                         ? "WiFi disconnected"
+                                         : (!id(normal_ha_api_connected) ? "Home Assistant\ndisconnected" : "Device Offline");
+          lv_label_set_text(id(normal_curtain_detail_offline_text), offline_text);
+
+  - id: refresh_normal_settings_detail_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+
+          int selected = id(normal_settings_selected_index);
+          if (selected < 0) {
+            selected = 0;
+          }
+          if (selected > 4) {
+            selected = 4;
+          }
+          id(normal_settings_selected_index) = selected;
+
+          lv_obj_t *roller = id(normal_settings_roller)->obj;
+          lv_obj_t *arrow = id(normal_settings_arrow_hint);
+          lv_obj_set_style_bg_color(id(normal_settings_page)->obj, lv_color_hex(0x1A1A1A), 0);
+          lv_obj_set_style_bg_color(id(normal_settings_detail_shell), lv_color_hex(0x1A1A1A), 0);
+          lv_obj_set_style_border_width(id(normal_settings_detail_shell), 0, 0);
+          lv_label_set_text(id(normal_settings_header_title), "Settings");
+
+          lv_obj_set_style_bg_opa(roller, LV_OPA_TRANSP, LV_PART_MAIN);
+          lv_obj_set_style_border_width(roller, 0, LV_PART_MAIN);
+          lv_obj_set_style_text_color(roller, lv_color_hex(0x4D4D4D), LV_PART_MAIN);
+          lv_obj_set_style_text_font(roller, id(fonts_MiSans_Medium_16), LV_PART_MAIN);
+          lv_obj_set_style_text_line_space(roller, 15, LV_PART_MAIN);
+
+          lv_obj_set_style_bg_color(roller, lv_color_hex(0x3D3D3D), LV_PART_SELECTED);
+          lv_obj_set_style_bg_opa(roller, LV_OPA_COVER, LV_PART_SELECTED);
+          lv_obj_set_style_radius(roller, 15, LV_PART_SELECTED);
+          lv_obj_set_style_text_color(roller, lv_color_white(), LV_PART_SELECTED);
+          lv_obj_set_style_text_font(roller, id(fonts_MiSans_Medium_18), LV_PART_SELECTED);
+          lv_obj_set_style_pad_left(roller, 20, LV_PART_SELECTED);
+          lv_obj_set_style_pad_right(roller, 40, LV_PART_SELECTED);
+
+          lv_roller_set_selected(roller, selected, LV_ANIM_OFF);
+          lv_obj_align_to(arrow, roller, LV_ALIGN_CENTER, 85, 0);
+
+  - id: refresh_normal_settings_wifi_detail_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_WIFI) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+
+          auto set_text = [](lv_obj_t *obj, const std::string &text) {
+            lv_label_set_text(obj, text.c_str());
+          };
+
+          std::string ssid_text = "Not connected";
+          std::string ip_text = "IP : --.--.--.--";
+          if (wifi::global_wifi_component != nullptr && wifi::global_wifi_component->is_connected()) {
+            char ssid_buf[wifi::SSID_BUFFER_SIZE] = {0};
+            std::span<char, wifi::SSID_BUFFER_SIZE> ssid_span(ssid_buf);
+            const char *ssid_cstr = wifi::global_wifi_component->wifi_ssid_to(ssid_span);
+            if (ssid_cstr != nullptr && ssid_cstr[0] != '\0') {
+              ssid_text = ssid_cstr;
+            }
+            const auto addresses = wifi::global_wifi_component->get_ip_addresses();
+            for (const auto &ip : addresses) {
+              if (!ip.is_set()) {
+                continue;
+              }
+              char ip_buf[network::IP_ADDRESS_BUFFER_SIZE] = {0};
+              ip.str_to(ip_buf);
+              ip_text = std::string("IP : ") + ip_buf;
+              break;
+            }
+          }
+
+          lv_obj_set_style_bg_color(id(normal_settings_wifi_page)->obj, lv_color_hex(0x1A1A1A), 0);
+          lv_obj_set_style_bg_color(id(normal_settings_wifi_shell), lv_color_hex(0x1A1A1A), 0);
+          lv_obj_set_style_border_width(id(normal_settings_wifi_shell), 0, 0);
+
+          set_text(id(normal_settings_wifi_title), "Wireless network");
+          set_text(id(normal_settings_wifi_ssid), ssid_text);
+          set_text(id(normal_settings_wifi_ip), ip_text);
+
+          lv_obj_set_style_bg_color(id(normal_settings_wifi_card), lv_color_hex(0x000000), LV_PART_MAIN);
+          lv_obj_set_style_bg_opa(id(normal_settings_wifi_card), LV_OPA_TRANSP, LV_PART_MAIN);
+          lv_obj_set_style_border_width(id(normal_settings_wifi_card), 0, LV_PART_MAIN);
+          lv_obj_set_style_border_width(id(normal_settings_wifi_card_top), 0, LV_PART_MAIN);
+          lv_obj_set_style_border_width(id(normal_settings_wifi_card_btm), 0, LV_PART_MAIN);
+          lv_obj_set_style_bg_color(id(normal_settings_wifi_card_top), lv_color_hex(0x3D3D3D), LV_PART_MAIN);
+          lv_obj_set_style_bg_color(id(normal_settings_wifi_card_btm), lv_color_hex(0x2D2D2D), LV_PART_MAIN);
+          lv_obj_set_style_bg_opa(id(normal_settings_wifi_card_top), LV_OPA_COVER, LV_PART_MAIN);
+          lv_obj_set_style_bg_opa(id(normal_settings_wifi_card_btm), LV_OPA_COVER, LV_PART_MAIN);
+
+          lv_obj_set_style_bg_color(id(normal_settings_wifi_ok_btn), lv_color_hex(0x0091FF), LV_PART_MAIN);
+          lv_obj_set_style_border_width(id(normal_settings_wifi_ok_btn), 1, LV_PART_MAIN);
+          lv_obj_set_style_border_color(id(normal_settings_wifi_ok_btn), lv_color_hex(0x66BFFF), LV_PART_MAIN);
+          lv_obj_set_style_shadow_width(id(normal_settings_wifi_ok_btn), 0, LV_PART_MAIN);
+
+  - id: refresh_normal_settings_brightness_detail_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+
+          int pct = id(normal_brightness_value);
+          if (pct < 10) pct = 10;
+          if (pct > 100) pct = 100;
+          id(normal_brightness_value) = pct;
+
+          lv_obj_set_style_bg_color(id(normal_settings_brightness_page)->obj, lv_color_hex(0x1A1A1A), 0);
+          lv_obj_set_style_bg_color(id(normal_settings_brightness_shell), lv_color_hex(0x1A1A1A), 0);
+          lv_obj_set_style_border_width(id(normal_settings_brightness_shell), 0, 0);
+
+          lv_label_set_text(id(normal_settings_brightness_title), "Brightness");
+          lv_slider_set_value(id(normal_settings_brightness_slider), pct, LV_ANIM_OFF);
+          char value_text[48];
+          snprintf(value_text, sizeof(value_text), "Brightness: %d%%", pct);
+          lv_label_set_text(id(normal_settings_brightness_value_label), value_text);
+
+  - id: refresh_normal_settings_knob_detail_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+
+          lv_obj_set_style_bg_color(id(normal_settings_knob_page)->obj, lv_color_hex(0x1A1A1A), 0);
+          lv_obj_set_style_bg_color(id(normal_settings_knob_shell), lv_color_hex(0x1A1A1A), 0);
+          lv_obj_set_style_border_width(id(normal_settings_knob_shell), 0, 0);
+
+          int pending = id(normal_knob_pending_value);
+          if (pending != 1 && pending != 2 && pending != 4) {
+            pending = 1;
+          }
+          id(normal_knob_pending_value) = pending;
+          int selected = 2;
+          if (pending == 2) {
+            selected = 1;
+          } else if (pending == 4) {
+            selected = 0;
+          }
+          lv_obj_t *roller = id(normal_settings_knob_roller)->obj;
+
+          lv_label_set_text(id(normal_settings_knob_title), "Knob sensitivity");
+          lv_obj_set_style_bg_opa(roller, LV_OPA_TRANSP, LV_PART_MAIN);
+          lv_obj_set_style_border_width(roller, 0, LV_PART_MAIN);
+          lv_obj_set_style_text_color(roller, lv_color_hex(0x4D4D4D), LV_PART_MAIN);
+          lv_obj_set_style_text_font(roller, id(fonts_MiSans_Medium_16), LV_PART_MAIN);
+          lv_obj_set_style_text_line_space(roller, 15, LV_PART_MAIN);
+
+          lv_obj_set_style_bg_color(roller, lv_color_hex(0x3D3D3D), LV_PART_SELECTED);
+          lv_obj_set_style_bg_opa(roller, LV_OPA_COVER, LV_PART_SELECTED);
+          lv_obj_set_style_radius(roller, 15, LV_PART_SELECTED);
+          lv_obj_set_style_text_color(roller, lv_color_white(), LV_PART_SELECTED);
+          lv_obj_set_style_text_font(roller, id(fonts_MiSans_Medium_18), LV_PART_SELECTED);
+          lv_obj_set_style_pad_left(roller, 20, LV_PART_SELECTED);
+          lv_obj_set_style_pad_right(roller, 40, LV_PART_SELECTED);
+
+          lv_roller_set_selected(roller, selected, LV_ANIM_OFF);
+
+  - id: refresh_normal_settings_user_manual_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+          int index = id(normal_user_manual_qrcode_index);
+          if (index < 0) {
+            index = 0;
+          }
+          if (index > 2) {
+            index = 2;
+          }
+          id(normal_user_manual_qrcode_index) = index;
+
+          lv_obj_set_style_bg_color(id(normal_settings_user_manual_page)->obj, lv_color_hex(0x000000), 0);
+          lv_obj_set_style_bg_color(id(normal_settings_user_manual_shell), lv_color_hex(0x262626), 0);
+          lv_obj_set_style_border_width(id(normal_settings_user_manual_shell), 0, 0);
+          lv_obj_set_style_bg_color(id(normal_settings_user_manual_ok_btn), lv_color_hex(0x0091FF), LV_PART_MAIN);
+          lv_obj_set_style_border_width(id(normal_settings_user_manual_ok_btn), 0, LV_PART_MAIN);
+          lv_obj_set_style_shadow_width(id(normal_settings_user_manual_ok_btn), 0, LV_PART_MAIN);
+
+          if (index == 0) {
+            lv_label_set_text(id(normal_settings_user_manual_subtitle), "wiki");
+            lv_img_set_src(id(normal_settings_user_manual_qrcode), id(normal_user_manual_qrcode_wiki_img));
+          } else if (index == 1) {
+            lv_label_set_text(id(normal_settings_user_manual_subtitle), "Device github");
+            lv_img_set_src(id(normal_settings_user_manual_qrcode), id(normal_user_manual_qrcode_device_github_img));
+          } else {
+            lv_label_set_text(id(normal_settings_user_manual_subtitle), "Firmware github");
+            lv_img_set_src(id(normal_settings_user_manual_qrcode), id(normal_user_manual_qrcode_firmware_github_img));
+          }
+
+          if (index == 0) {
+            lv_obj_add_flag(id(normal_settings_user_manual_arrow_left), LV_OBJ_FLAG_HIDDEN);
+          } else {
+            lv_obj_clear_flag(id(normal_settings_user_manual_arrow_left), LV_OBJ_FLAG_HIDDEN);
+          }
+          if (index == 2) {
+            lv_obj_add_flag(id(normal_settings_user_manual_arrow_right), LV_OBJ_FLAG_HIDDEN);
+          } else {
+            lv_obj_clear_flag(id(normal_settings_user_manual_arrow_right), LV_OBJ_FLAG_HIDDEN);
+          }
+
+  - id: apply_normal_settings_knob_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(normal_device_detail_active) || id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB) {
+            return;
+          }
+          int pending = id(normal_knob_pending_value);
+          if (pending != 1 && pending != 2 && pending != 4) {
+            pending = 1;
+          }
+          id(normal_knob_pending_value) = pending;
+          id(normal_knob_applied_value) = pending;
+          ESP_LOGI("normal_mode", "knob sensitivity applied: %d", pending);
+      - sensor.rotary_encoder.set_value:
+          id: knob_enc
+          value: !lambda |-
+            return id(normal_knob_applied_value);
+      - script.execute: exit_normal_settings_knob_detail
+
+  - id: refresh_normal_provisioning_page
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active()) {
+            return;
+          }
+
+          lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+
+          auto set_text = [](lv_obj_t *obj, const std::string &text) {
+            lv_label_set_text(obj, text.c_str());
+          };
+          const std::string ssid = get_provisioning_ap_ssid();
+          set_text(id(normal_provisioning_ssid), ssid);
+          set_text(id(normal_add_hmi_ssid), ssid);
+
+  - id: emit_normal_switch_control_event
+    mode: restart
+    then:
+      - lambda: |-
+          int detail_index = id(normal_device_detail_index);
+          if (detail_index < 0) {
+            detail_index = 0;
+          }
+          if (detail_index > 9) {
+            detail_index = 9;
+          }
+
+          std::string device_title = id(ui_presenter)->get_normal_device_title(detail_index);
+          if (device_title.empty()) {
+            device_title = "switch";
+          }
+
+          ESP_LOGI("normal_mode",
+                   "switch/plug/light detail pressed: index=%d kind=%d entity_id=%s title=%s local_gpio=%s",
+                   detail_index,
+                   id(normal_device_detail_kind),
+                   id(ui_presenter)->get_normal_device_entity_id(detail_index).c_str(),
+                   device_title.c_str(),
+                   is_local_hmi_gpio_switch_entity_id(id(ui_presenter)->get_normal_device_entity_id(detail_index))
+                       ? "YES"
+                       : "NO");
+      - lambda: |-
+          int detail_index = id(normal_device_detail_index);
+          if (detail_index < 0) detail_index = 0;
+          if (detail_index > 9) detail_index = 9;
+          const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(detail_index);
+          if (!is_local_hmi_gpio_switch_entity_id(entity_id)) {
+            return;
+          }
+          bool new_state = false;
+          switch (local_hmi_gpio_switch_io_from_entity_id(entity_id)) {
+            case 10:
+              new_state = !id(normal_gpio_io10).state;
+              if (new_state) {
+                id(normal_gpio_io10).turn_on();
+              } else {
+                id(normal_gpio_io10).turn_off();
+              }
+              break;
+            case 11:
+              new_state = !id(normal_gpio_io11).state;
+              if (new_state) {
+                id(normal_gpio_io11).turn_on();
+              } else {
+                id(normal_gpio_io11).turn_off();
+              }
+              break;
+            case 17:
+              new_state = !id(normal_gpio_io17).state;
+              if (new_state) {
+                id(normal_gpio_io17).turn_on();
+              } else {
+                id(normal_gpio_io17).turn_off();
+              }
+              break;
+            case 18:
+              new_state = !id(normal_gpio_io18).state;
+              if (new_state) {
+                id(normal_gpio_io18).turn_on();
+              } else {
+                id(normal_gpio_io18).turn_off();
+              }
+              break;
+            default:
+              return;
+          }
+          id(app_storage)->set_normal_ui_device_state(detail_index, new_state);
+          id(normal_device_detail_is_on) = new_state;
+          id(hmi_switch_state) = new_state;
+          ESP_LOGI("normal_mode", "local HMI GPIO switch toggled: index=%d entity_id=%s state=%s",
+                   detail_index, entity_id.c_str(), new_state ? "ON" : "OFF");
+          id(refresh_normal_switch_detail_page).execute();
+      - script.execute: emit_normal_switch_or_light_control_event
+
+  - id: emit_normal_automation_control_event
+    mode: restart
+    parameters:
+      detail_index: int
+    then:
+      - if:
+          condition:
+            lambda: |-
+              const int index = std::clamp(detail_index, 0, 9);
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(index);
+              return id(normal_device_detail_active) &&
+                     id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_AUTOMATION &&
+                     id(normal_device_detail_index) == index &&
+                     id(normal_device_detail_online) &&
+                     !id(detail_long_press_exit_fired) &&
+                     entity_id.rfind("automation.", 0) == 0;
+          then:
+            - lambda: |-
+                const int index = std::clamp(detail_index, 0, 9);
+                id(normal_automation_press_feedback_active) = true;
+                lv_img_set_src(id(normal_automation_detail_icon),
+                               id(normal_device_automation_detail_press_img));
+                ESP_LOGI("normal_mode",
+                         "automation trigger requested: index=%d entity_id=%s",
+                         index,
+                         id(ui_presenter)->get_normal_device_entity_id(index).c_str());
+            - homeassistant.service:
+                service: automation.trigger
+                data_template:
+                  entity_id: "{{ target_entity_id }}"
+                variables:
+                  target_entity_id: !lambda |-
+                    const int index = std::clamp(detail_index, 0, 9);
+                    return id(ui_presenter)->get_normal_device_entity_id(index);
+            - delay: 180ms
+            - lambda: |-
+                const int index = std::clamp(detail_index, 0, 9);
+                id(normal_automation_press_feedback_active) = false;
+                if (id(normal_device_detail_active) &&
+                    id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_AUTOMATION &&
+                    id(normal_device_detail_index) == index) {
+                  lv_img_set_src(id(normal_automation_detail_icon),
+                                 id(normal_device_automation_detail_img));
+                }
+
+  - id: emit_normal_switch_or_light_control_event
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: |-
+              int detail_index = id(normal_device_detail_index);
+              if (detail_index < 0) detail_index = 0;
+              if (detail_index > 9) detail_index = 9;
+              const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(detail_index);
+              return !entity_id.empty() && entity_id.rfind("light.", 0) == 0;
+          then:
+            - homeassistant.service:
+                service: light.toggle
+                data_template:
+                  entity_id: "{{ target_entity_id }}"
+                variables:
+                  target_entity_id: !lambda |-
+                    int detail_index = id(normal_device_detail_index);
+                    if (detail_index < 0) detail_index = 0;
+                    if (detail_index > 9) detail_index = 9;
+                    return id(ui_presenter)->get_normal_device_entity_id(detail_index);
+          else:
+            - if:
+                condition:
+                  lambda: |-
+                    int detail_index = id(normal_device_detail_index);
+                    if (detail_index < 0) detail_index = 0;
+                    if (detail_index > 9) detail_index = 9;
+                    const std::string entity_id = id(ui_presenter)->get_normal_device_entity_id(detail_index);
+                    return !entity_id.empty() && !is_local_hmi_gpio_switch_entity_id(entity_id);
+                then:
+                  - homeassistant.service:
+                      service: switch.toggle
+                      data_template:
+                        entity_id: "{{ target_entity_id }}"
+                      variables:
+                        target_entity_id: !lambda |-
+                          int detail_index = id(normal_device_detail_index);
+                          if (detail_index < 0) detail_index = 0;
+                          if (detail_index > 9) detail_index = 9;
+                          return id(ui_presenter)->get_normal_device_entity_id(detail_index);
+
+  - id: enter_normal_settings_wifi_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS) {
+            return;
+          }
+          id(normal_device_detail_active) = true;
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS_WIFI;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          ESP_LOGI("normal_mode", "settings wifi detail opened");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_wifi_page)->obj);
+      - script.execute: refresh_normal_settings_wifi_detail_page
+
+  - id: enter_normal_settings_brightness_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS) {
+            return;
+          }
+          id(normal_device_detail_active) = true;
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          ESP_LOGI("normal_mode", "settings brightness detail opened");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_brightness_page)->obj);
+      - script.execute: refresh_normal_settings_brightness_detail_page
+
+  - id: enter_normal_settings_knob_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS) {
+            return;
+          }
+          id(normal_device_detail_active) = true;
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          id(normal_knob_pending_value) = id(normal_knob_applied_value);
+          ESP_LOGI("normal_mode", "settings knob detail opened");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_knob_page)->obj);
+      - script.execute: refresh_normal_settings_knob_detail_page
+
+  - id: enter_normal_settings_user_manual
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS) {
+            return;
+          }
+          id(normal_device_detail_active) = true;
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          id(normal_user_manual_qrcode_index) = 0;
+          ESP_LOGI("normal_mode", "settings user manual opened");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_user_manual_page)->obj);
+      - script.execute: refresh_normal_settings_user_manual_page
+
+  - id: enter_normal_settings_user_manual_qrcode
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS) {
+            return;
+          }
+          id(normal_device_detail_active) = true;
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL_QR_CODE;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          ESP_LOGI("normal_mode", "settings user manual QR code opened");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_user_manual_qrcode_page)->obj);
+
+  - id: exit_normal_settings_wifi_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(normal_device_detail_active) || id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_WIFI) {
+            return;
+          }
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          ESP_LOGI("normal_mode", "settings wifi detail closed");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_page)->obj);
+      - script.execute:
+          id: refresh_normal_settings_detail_page
+
+  - id: exit_normal_settings_brightness_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(normal_device_detail_active) || id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS) {
+            return;
+          }
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          ESP_LOGI("normal_mode", "settings brightness detail closed");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_page)->obj);
+      - script.execute:
+          id: refresh_normal_settings_detail_page
+
+  - id: exit_normal_settings_knob_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(normal_device_detail_active) || id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB) {
+            return;
+          }
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          ESP_LOGI("normal_mode", "settings knob detail closed");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_page)->obj);
+      - script.execute:
+          id: refresh_normal_settings_detail_page
+
+  - id: exit_normal_settings_user_manual
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(normal_device_detail_active) || id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL) {
+            return;
+          }
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          ESP_LOGI("normal_mode", "settings user manual closed");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_page)->obj);
+      - script.execute:
+          id: refresh_normal_settings_detail_page
+
+  - id: exit_normal_settings_user_manual_qrcode
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(normal_device_detail_active) || id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL_QR_CODE) {
+            return;
+          }
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_SETTINGS;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          ESP_LOGI("normal_mode", "settings user manual QR code closed");
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          lv_scr_load(id(normal_settings_page)->obj);
+      - script.execute:
+          id: refresh_normal_settings_detail_page
+
+  - id: emit_normal_curtain_event
+    mode: restart
+    parameters:
+      detail_index: int
+      position: int
+    then:
+      - delay: 288ms
+      - if:
+          condition:
+            lambda: |-
+              int index = detail_index;
+              if (index < 0) index = 0;
+              if (index > 9) index = 9;
+              return !id(ui_presenter)->get_normal_device_entity_id(index).empty();
+          then:
+            - lambda: |-
+                int index = detail_index;
+                if (index < 0) index = 0;
+                if (index > 9) index = 9;
+                int target_position = position;
+                if (target_position < 0) target_position = 0;
+                if (target_position > 100) target_position = 100;
+                ESP_LOGI("normal_mode", "curtain target position updated: index=%d target_position=%d entity_id=%s",
+                         index, target_position, id(ui_presenter)->get_normal_device_entity_id(index).c_str());
+
+  - id: commit_normal_curtain_position_detail
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(normal_device_detail_active) || id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_CURTAIN) {
+                return false;
+              }
+              int detail_index = id(normal_device_detail_index);
+              if (detail_index < 0) detail_index = 0;
+              if (detail_index > 9) detail_index = 9;
+              return !id(ui_presenter)->get_normal_device_entity_id(detail_index).empty();
+          then:
+            - homeassistant.service:
+                service: cover.set_cover_position
+                data_template:
+                  entity_id: "{{ target_entity_id }}"
+                  position: "{{ target_position }}"
+                variables:
+                  target_entity_id: !lambda |-
+                    int detail_index = id(normal_device_detail_index);
+                    if (detail_index < 0) detail_index = 0;
+                    if (detail_index > 9) detail_index = 9;
+                    return id(ui_presenter)->get_normal_device_entity_id(detail_index);
+                  target_position: !lambda |-
+                    return std::clamp(id(normal_device_detail_curtain_target_position), 0, 100);
+
+  - id: complete_normal_curtain_motion
+    mode: restart
+    then:
+      - delay: 1500ms
+      - lambda: |-
+          if (!id(ui_presenter)->is_normal_mode_active() ||
+              id(ui_presenter)->is_standby_active() ||
+              !id(normal_device_detail_active) ||
+              id(normal_device_detail_kind) != NORMAL_DEVICE_DETAIL_KIND_CURTAIN) {
+            return;
+          }
+          int detail_index = id(normal_device_detail_index);
+          if (detail_index < 0) {
+            detail_index = 0;
+          }
+          if (detail_index > 9) {
+            detail_index = 9;
+          }
+          const int target_position = std::clamp(id(normal_device_detail_curtain_target_position), 0, 100);
+          ESP_LOGI("normal_mode", "curtain motion complete: index=%d target_position=%d", detail_index, target_position);
+
+  - id: enter_normal_switch_detail
+    mode: restart
+    then:
+      - lambda: |-
+          int raw_selected_index = id(normal_device_selected_index);
+          int total = id(normal_device_count);
+          if (total < 0) total = 0;
+          if (total > 10) total = 10;
+          const int settings_index = total == 0 ? (id(normal_ha_added) ? 1 : 2) : total;
+          if (total == 0 && raw_selected_index == 0) {
+            ESP_LOGI("normal_mode", "detail entry ignored: empty list page has no detail");
+            return;
+          }
+          int detail_index = raw_selected_index;
+          if (detail_index < 0) {
+            detail_index = 0;
+          }
+
+          std::string device_type = "";
+          switch (detail_index) {
+            case 0:
+              device_type = id(ui_presenter)->get_normal_device_type(0);
+              break;
+            case 1:
+              device_type = id(ui_presenter)->get_normal_device_type(1);
+              break;
+            case 2:
+              device_type = id(ui_presenter)->get_normal_device_type(2);
+              break;
+            case 3:
+              device_type = id(ui_presenter)->get_normal_device_type(3);
+              break;
+            case 4:
+              device_type = id(ui_presenter)->get_normal_device_type(4);
+              break;
+            case 5:
+              device_type = id(ui_presenter)->get_normal_device_type(5);
+              break;
+            case 6:
+              device_type = id(ui_presenter)->get_normal_device_type(6);
+              break;
+            case 7:
+              device_type = id(ui_presenter)->get_normal_device_type(7);
+              break;
+            case 8:
+              device_type = id(ui_presenter)->get_normal_device_type(8);
+              break;
+            default:
+              device_type = id(ui_presenter)->get_normal_device_type(9);
+              break;
+          }
+
+          auto lower = [](std::string s) {
+            for (char &c : s) {
+              if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+            }
+            return s;
+          };
+          if (device_type.empty()) {
+            device_type = "switch";
+          }
+          device_type = lower(device_type);
+          int detail_kind = NORMAL_DEVICE_DETAIL_KIND_NONE;
+          if (raw_selected_index == settings_index) {
+            detail_kind = NORMAL_DEVICE_DETAIL_KIND_SETTINGS;
+          } else if (device_type == "switch") {
+            detail_kind = NORMAL_DEVICE_DETAIL_KIND_SWITCH;
+          } else if (device_type == "plug" || device_type == "chazuo") {
+            detail_kind = NORMAL_DEVICE_DETAIL_KIND_PLUG;
+          } else if (device_type == "light" || device_type == "liang" ||
+                     device_type == "dimming_light" || device_type == "dimmable_light" || device_type == "dimming") {
+            detail_kind = NORMAL_DEVICE_DETAIL_KIND_LIGHT;
+          } else if (device_type == "curtain" || device_type == "cover") {
+            detail_kind = NORMAL_DEVICE_DETAIL_KIND_CURTAIN;
+          } else if (device_type == "automation") {
+            detail_kind = NORMAL_DEVICE_DETAIL_KIND_AUTOMATION;
+          }
+          if (detail_kind == NORMAL_DEVICE_DETAIL_KIND_NONE) {
+            ESP_LOGI("normal_mode",
+                     "detail entry ignored: selected item is not a switch, plug, light, curtain or automation");
+            return;
+          }
+
+          if (detail_index > 9) {
+            detail_index = 9;
+          }
+
+          id(normal_device_detail_index) = (detail_kind == NORMAL_DEVICE_DETAIL_KIND_SETTINGS) ? -1 : detail_index;
+          id(normal_device_detail_active) = true;
+          id(normal_device_detail_kind) = detail_kind;
+          id(normal_page_index) = 1;
+          id(key_long_press_handled) = true;
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          if (detail_kind == NORMAL_DEVICE_DETAIL_KIND_SETTINGS) {
+            id(normal_settings_selected_index) = 0;
+            ESP_LOGI("normal_mode", "settings detail opened");
+            lv_scr_load(id(normal_settings_page)->obj);
+            id(refresh_normal_settings_detail_page).execute();
+            return;
+          }
+          std::string detail_entity_id = id(ui_presenter)->get_normal_device_entity_id(detail_index);
+          auto local_hmi_gpio_switch_state = [&](const std::string &entity_id, bool *state) -> bool {
+            switch (local_hmi_gpio_switch_io_from_entity_id(entity_id)) {
+              case 10:
+                *state = id(normal_gpio_io10).state;
+                return true;
+              case 11:
+                *state = id(normal_gpio_io11).state;
+                return true;
+              case 17:
+                *state = id(normal_gpio_io17).state;
+                return true;
+              case 18:
+                *state = id(normal_gpio_io18).state;
+                return true;
+              default:
+                return false;
+            }
+          };
+          bool detail_is_on = id(app_storage)->get_normal_ui_device_state(detail_index);
+          const bool is_local_gpio_switch = detail_kind == NORMAL_DEVICE_DETAIL_KIND_SWITCH && local_hmi_gpio_switch_state(detail_entity_id, &detail_is_on);
+          if (is_local_gpio_switch) {
+            id(app_storage)->set_normal_ui_device_state(detail_index, detail_is_on);
+          }
+          id(normal_device_detail_is_on) = detail_is_on;
+          id(hmi_switch_state) = id(normal_device_detail_is_on);
+          id(normal_device_detail_online) = (detail_kind == NORMAL_DEVICE_DETAIL_KIND_SETTINGS)
+                                                 ? true
+                                                 : (is_local_gpio_switch ||
+                                                    ((detail_index >= 0 && detail_index < 10)
+                                                        ? ((id(normal_device_online_mask) & (1 << detail_index)) != 0)
+                                                        : true));
+          if (detail_kind == NORMAL_DEVICE_DETAIL_KIND_CURTAIN) {
+            const int feedback_position = std::clamp((int) id(app_storage)->get_normal_ui_device_position(detail_index), 0, 100);
+            id(normal_device_detail_curtain_feedback_position) = feedback_position;
+            id(normal_device_detail_curtain_target_position) = feedback_position;
+            id(normal_device_detail_curtain_adjust_active) = false;
+            lv_scr_load(id(normal_curtain_page)->obj);
+            id(refresh_normal_curtain_detail_page).execute();
+            return;
+          }
+          if (detail_kind == NORMAL_DEVICE_DETAIL_KIND_LIGHT) {
+            id(normal_detail_light_mode) = 0;
+            auto detail_slot = id(app_storage)->normal_device_slot(detail_index);
+            auto light_state = detail_slot.light();
+            int mode_count = 0;
+            if (light_state.custom_supports_brightness()) mode_count++;
+            if (light_state.custom_supports_color_temperature()) mode_count++;
+            if (light_state.custom_supports_rgb()) mode_count++;
+            id(normal_detail_light_mode_count) = mode_count;
+            int cct_value_pct = (int) light_state.color_temperature_step();
+            id(normal_light_cct_value_pct) = std::clamp(cct_value_pct, 0, 10);
+            int rgb_value_pct = (int) light_state.rgb_tick;
+            id(normal_light_rgb_value_pct) = std::clamp(rgb_value_pct, 0, 35);
+            id(normal_clear_wifi_allowed) = true;
+            ESP_LOGI("normal_mode", "light detail opened for index=%d", detail_index);
+            lv_scr_load(id(normal_light_page)->obj);
+            id(refresh_normal_light_detail_page).execute();
+            return;
+          }
+          if (detail_kind == NORMAL_DEVICE_DETAIL_KIND_AUTOMATION) {
+            id(normal_automation_press_feedback_active) = false;
+            ESP_LOGI("normal_mode", "automation detail opened for index=%d", detail_index);
+            lv_scr_load(id(normal_automation_page)->obj);
+            id(refresh_normal_automation_detail_page).execute();
+            return;
+          }
+          ESP_LOGI("normal_mode", "switch detail opened for index=%d", detail_index);
+          lv_scr_load(id(normal_switch_page)->obj);
+          id(refresh_normal_switch_detail_page).execute();
+
+  - id: enter_normal_light_detail_mode_switching
+    mode: restart
+    then:
+      - delay: 300ms
+      - if:
+          condition:
+            lambda: |-
+              return !id(screen_off_state) &&
+                     id(key_btn).state &&
+                     id(ui_presenter)->is_normal_mode_active() &&
+                     !id(ui_presenter)->is_standby_active() &&
+                     !id(detail_long_press_exit_fired) &&
+                     !id(key_long_press_handled) &&
+                     id(normal_device_detail_active) &&
+                     id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT &&
+                     id(normal_detail_light_mode_count) > 0 &&
+                     !id(normal_detail_light_mode_adjusting);
+          then:
+            - lambda: |-
+                id(normal_detail_light_mode_adjusting) = true;
+                id(normal_clear_wifi_allowed) = false;
+                ESP_LOGI("normal_mode", "light detail mode switching entered");
+            - script.execute: refresh_normal_light_detail_page
+            - lambda: |-
+                id(ui_presenter)->notify_user_activity();
+
+  - id: emit_normal_dimming_light_event
+    mode: restart
+    parameters:
+      detail_index: int
+      brightness_pct: int
+      is_on: bool
+    then:
+      - lambda: |-
+          int index = std::clamp(detail_index, 0, 9);
+          custom_logic_entity_sub::begin_normal_light_feedback_window(
+              index, custom_logic::NORMAL_LIGHT_FEEDBACK_BRIGHTNESS, is_on, brightness_pct);
+      - delay: 178ms
+      - lambda: |-
+          int index = detail_index;
+          if (index < 0) index = 0;
+          if (index > 9) index = 9;
+          int brightness = std::clamp(brightness_pct, 0, 100);
+          ESP_LOGI("normal_mode", "dimming light direct control: index=%d brightness=%d state=%s",
+                   index, brightness, is_on ? "ON" : "OFF");
+      - if:
+          condition:
+            lambda: |-
+              int index = detail_index;
+              if (index < 0) index = 0;
+              if (index > 9) index = 9;
+              return !id(ui_presenter)->get_normal_device_entity_id(index).empty();
+          then:
+            - if:
+                condition:
+                  lambda: |-
+                    return !is_on;
+                then:
+                  - homeassistant.service:
+                      service: light.turn_off
+                      data_template:
+                        entity_id: "{{ target_entity_id }}"
+                      variables:
+                        target_entity_id: !lambda |-
+                          int index = detail_index;
+                          if (index < 0) index = 0;
+                          if (index > 9) index = 9;
+                          return id(ui_presenter)->get_normal_device_entity_id(index);
+                else:
+                  - homeassistant.service:
+                      service: light.turn_on
+                      data_template:
+                        entity_id: "{{ target_entity_id }}"
+                        brightness_pct: "{{ target_brightness }}"
+                      variables:
+                        target_entity_id: !lambda |-
+                          int index = detail_index;
+                          if (index < 0) index = 0;
+                          if (index > 9) index = 9;
+                          return id(ui_presenter)->get_normal_device_entity_id(index);
+                        target_brightness: !lambda |-
+                          int brightness = std::clamp(brightness_pct, 0, 100);
+                          return brightness;
+      - delay: 935ms
+      - lambda: |-
+          const int index = std::clamp(detail_index, 0, 9);
+          custom_logic_entity_sub::flush_normal_light_feedback_window(
+              index, id(ui_presenter)->get_normal_device_entity_id(index));
+      - script.execute: refresh_normal_light_detail_page
+
+  - id: emit_normal_cct_light_event
+    mode: restart
+    parameters:
+      detail_index: int
+      color_temperature: int
+    then:
+      - lambda: |-
+          int index = std::clamp(detail_index, 0, 9);
+          custom_logic_entity_sub::begin_normal_light_feedback_window(
+              index, custom_logic::NORMAL_LIGHT_FEEDBACK_COLOR_TEMPERATURE, true, color_temperature);
+      - delay: 178ms
+      - lambda: |-
+          int index = detail_index;
+          if (index < 0) index = 0;
+          if (index > 9) index = 9;
+          auto light_state = id(app_storage)->normal_device_slot(index).light();
+          int cct_min_kelvin = (int) light_state.min_color_temperature_kelvin;
+          int cct_max_kelvin = (int) light_state.max_color_temperature_kelvin;
+          int cct_kelvin = color_temperature;
+          if (cct_min_kelvin > 0 && cct_max_kelvin > 0) {
+            if (cct_min_kelvin > cct_max_kelvin) {
+              const int tmp = cct_min_kelvin;
+              cct_min_kelvin = cct_max_kelvin;
+              cct_max_kelvin = tmp;
+            }
+            cct_kelvin = std::clamp(cct_kelvin, cct_min_kelvin, cct_max_kelvin);
+          }
+          ESP_LOGI("normal_mode", "light direct control cct: index=%d color_temperature_kelvin=%d",
+                   index, cct_kelvin);
+      - if:
+          condition:
+            lambda: |-
+              int index = detail_index;
+              if (index < 0) index = 0;
+              if (index > 9) index = 9;
+              return !id(ui_presenter)->get_normal_device_entity_id(index).empty();
+          then:
+            - homeassistant.service:
+                service: light.turn_on
+                data_template:
+                  entity_id: "{{ target_entity_id }}"
+                  color_temp_kelvin: "{{ target_color_temperature_kelvin }}"
+                variables:
+                  target_entity_id: !lambda |-
+                    int index = detail_index;
+                    if (index < 0) index = 0;
+                    if (index > 9) index = 9;
+                    return id(ui_presenter)->get_normal_device_entity_id(index);
+                  target_color_temperature_kelvin: !lambda |-
+                    int index = detail_index;
+                    if (index < 0) index = 0;
+                    if (index > 9) index = 9;
+                    auto light_state = id(app_storage)->normal_device_slot(index).light();
+                    int cct_min_kelvin = (int) light_state.min_color_temperature_kelvin;
+                    int cct_max_kelvin = (int) light_state.max_color_temperature_kelvin;
+                    int cct_kelvin = color_temperature;
+                    if (cct_min_kelvin > 0 && cct_max_kelvin > 0) {
+                      if (cct_min_kelvin > cct_max_kelvin) {
+                        const int tmp = cct_min_kelvin;
+                        cct_min_kelvin = cct_max_kelvin;
+                        cct_max_kelvin = tmp;
+                      }
+                      cct_kelvin = std::clamp(cct_kelvin, cct_min_kelvin, cct_max_kelvin);
+                    }
+                    return cct_kelvin;
+      - delay: 935ms
+      - lambda: |-
+          const int index = std::clamp(detail_index, 0, 9);
+          custom_logic_entity_sub::flush_normal_light_feedback_window(
+              index, id(ui_presenter)->get_normal_device_entity_id(index));
+      - script.execute: refresh_normal_light_detail_page
+
+  - id: emit_normal_rgb_light_event
+    mode: restart
+    parameters:
+      detail_index: int
+      rgb_value_pct: int
+    then:
+      - lambda: |-
+          int index = std::clamp(detail_index, 0, 9);
+          custom_logic_entity_sub::begin_normal_light_feedback_window(
+              index, custom_logic::NORMAL_LIGHT_FEEDBACK_RGB, true, rgb_value_pct);
+      - delay: 178ms
+      - lambda: |-
+          int index = detail_index;
+          if (index < 0) index = 0;
+          if (index > 9) index = 9;
+          int rgb_tick = std::clamp(rgb_value_pct, 0, 35);
+          int hue = (rgb_tick * 10) % 360;
+          int saturation = 100;
+          ESP_LOGI("normal_mode", "light direct control rgb: index=%d hue=%d saturation=%d",
+                   index, hue, saturation);
+      - if:
+          condition:
+            lambda: |-
+              int index = detail_index;
+              if (index < 0) index = 0;
+              if (index > 9) index = 9;
+              return !id(ui_presenter)->get_normal_device_entity_id(index).empty();
+          then:
+            - homeassistant.service:
+                service: light.turn_on
+                data_template:
+                  entity_id: "{{ target_entity_id }}"
+                  hs_color: !lambda |-
+                    static char hs_buf[32];
+                    int rgb_tick = std::clamp(rgb_value_pct, 0, 35);
+                    int hue = (rgb_tick * 10) % 360;
+                    int saturation = 100;
+                    sprintf(hs_buf, "[%d,%d]", hue, saturation);
+                    return hs_buf;
+                variables:
+                  target_entity_id: !lambda |-
+                    int index = detail_index;
+                    if (index < 0) index = 0;
+                    if (index > 9) index = 9;
+                    return id(ui_presenter)->get_normal_device_entity_id(index);
+      - delay: 935ms
+      - lambda: |-
+          const int index = std::clamp(detail_index, 0, 9);
+          custom_logic_entity_sub::flush_normal_light_feedback_window(
+              index, id(ui_presenter)->get_normal_device_entity_id(index));
+      - script.execute: refresh_normal_light_detail_page
+
+  - id: toggle_normal_switch_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(normal_device_detail_active)) {
+            return;
+          }
+          const bool new_state = !id(app_storage)->get_normal_ui_device_state(id(normal_device_detail_index));
+          if (!id(app_storage)->set_normal_ui_device_state(id(normal_device_detail_index), new_state)) {
+            ESP_LOGW("normal_mode", "detail toggled failed: unable to persist state for index=%d", id(normal_device_detail_index));
+            return;
+          }
+          id(normal_device_detail_is_on) = new_state;
+          id(hmi_switch_state) = new_state;
+          lv_obj_t *sw = id(hmi_gui_switch);
+          if (new_state) {
+            lv_obj_add_state(sw, LV_STATE_CHECKED);
+          } else {
+            lv_obj_clear_state(sw, LV_STATE_CHECKED);
+          }
+          ESP_LOGI("normal_mode", "detail toggled: %s", new_state ? "ON" : "OFF");
+      - script.execute: refresh_normal_switch_detail_page
+
+  - id: exit_normal_switch_detail
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(normal_device_detail_active)) {
+            return;
+          }
+          id(normal_device_detail_active) = false;
+          id(normal_device_detail_kind) = NORMAL_DEVICE_DETAIL_KIND_NONE;
+          id(normal_page_index) = 0;
+          id(normal_detail_exit_switch_ready) = false;
+          id(normal_detail_exit_light_ready) = false;
+          id(normal_device_detail_curtain_adjust_active) = false;
+          id(normal_device_detail_curtain_adjust_pending) = false;
+          id(normal_detail_light_mode_adjusting) = false;
+          id(normal_detail_light_mode_rotated) = false;
+          id(normal_detail_light_mode) = 0;
+          id(normal_detail_light_mode_count) = 0;
+          id(normal_automation_press_feedback_active) = false;
+          id(normal_detail_exit_settings_ready) = false;
+          id(normal_detail_exit_allowed) = false;
+          id(key_long_press_handled) = true;
+          id(normal_clear_wifi_allowed) = true;
+          id(normal_device_detail_online) = true;
+          ESP_LOGI("normal_mode", "detail closed");
+      - script.execute:
+          id: show_normal_device_entry_page
+          direction: 0

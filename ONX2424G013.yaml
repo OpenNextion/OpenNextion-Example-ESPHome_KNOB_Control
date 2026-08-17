@@ -1,0 +1,45 @@
+substitutions:
+  project_name: onx2424g013
+  project_friendly_name: ONX2424G013
+  # 留空时：normal mode 不强制覆盖 STA，优先使用 captive_portal 保存的配网信息。
+  # 若希望固化网络，可直接填写为与 Home Assistant 同一局域网的 Wi-Fi。
+  wifi_ssid: ""
+  wifi_password: ""
+  ap_password: ""
+  logger_level: INFO
+  uart_baud: "921600"
+  standby_timeout_seconds: "300"
+  diagnostics_update_interval: 15s
+  display_update_interval: 200ms
+  lcd_spi_data_rate: 40MHz
+  lcd_backlight_default: 100%
+  encoder_resolution: "4"
+  product_firmware_version: "0.1.0"
+  product_firmware_manifest_url: "https://opennextion.github.io/OpenNextion-Example-ESPHome_KNOB_Control/firmware/manifest.json"
+
+packages:
+  device: !include packages/base/device.yaml
+  connectivity: !include packages/base/connectivity.yaml
+  display: !include packages/base/display.yaml
+  input: !include packages/base/input.yaml
+  diagnostics: !include packages/base/diagnostics.yaml
+  mode_router: !include packages/features/mode_router.yaml
+  boot_status: !include packages/features/boot_status.yaml
+  normal_mode: !include packages/features/normal_mode.yaml
+
+preferences:
+  flash_write_interval: 5s
+
+# Enable AUTHCODE storage in eFuse via compile flag
+esphome:
+  includes:
+    - custom_logic.h
+    - custom_logic_entity_sub.h
+  name: ${project_name}
+  platformio_options:
+    build_flags:
+      - "-DENABLE_AUTHCODE_EFUSE"
+      #- "-DCONFIG_EFUSE_VIRTUAL"
+      # - "-DLV_USE_PERF_MONITOR=1"
+      # - "-DLV_USE_PERF_MONITOR_POS=LV_ALIGN_CENTER"
+      # - "-DLV_DISP_DEF_REFR_PERIOD=10"

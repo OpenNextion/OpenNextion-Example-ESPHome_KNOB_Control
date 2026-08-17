@@ -1,0 +1,288 @@
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          maintain_ha_websocket(id(ha_host).state, id(normal_wifi_connected), nullptr);
+      # A Native API client becomes identifiable as HA only after it subscribes
+      # to states, which happens after on_client_connected. Keep this derived
+      # state authoritative and self-healing.
+      - script.execute: refresh_normal_ha_connection_state
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() && !id(normal_backlight_applied_once);
+          then:
+            - lambda: |-
+                int pct = id(normal_brightness_value);
+                if (pct < 10) pct = 10;
+                if (pct > 100) pct = 100;
+                id(normal_brightness_value) = pct;
+                auto call = id(lcd_backlight)->make_call();
+                call.set_brightness((float) pct / 100.0f);
+                call.set_state(true);
+                call.set_transition_length(500);
+                call.perform();
+                id(ha_display_light_syncing) = true;
+                auto ha_call = id(ha_light)->make_call();
+                ha_call.set_state(true);
+                ha_call.set_brightness((float)pct / 100.0f);
+                ha_call.perform();
+                id(ha_display_light_syncing) = false;
+                id(normal_backlight_applied_once) = true;
+      - if:
+          condition:
+            lambda: |-
+              return !id(ui_presenter)->is_normal_mode_active() && id(normal_backlight_applied_once);
+          then:
+            - lambda: |-
+                id(normal_backlight_applied_once) = false;
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     id(mode_manager)->is_provisioning_mode_enabled();
+          then:
+            - lvgl.page.show: normal_provisioning_page
+            - script.execute: refresh_normal_provisioning_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     !id(mode_manager)->is_provisioning_mode_enabled() &&
+                     id(normal_page_index) == 0 &&
+                     !id(normal_device_detail_active) &&
+                     !id(normal_ha_added) &&
+                     id(normal_device_count) <= 0 &&
+                     id(normal_device_selected_index) == 0;
+          then:
+            - script.execute:
+                id: show_normal_device_entry_page
+                direction: 0
+            - script.execute: refresh_normal_provisioning_page
+      - if:
+          condition:
+            lambda: |-
+              auto now = id(ha_time).now();
+              return now.is_valid() &&
+                     id(ui_presenter)->is_normal_mode_active() &&
+                     id(normal_ha_added) &&
+                     !id(screen_off_state) &&
+                     !id(sleep_mode_state) &&
+                     id(ui_presenter)->should_enter_sleep_mode(now.hour, now.minute);
+          then:
+            - script.execute: enter_sleep_mode
+      - if:
+          condition:
+            lambda: |-
+              auto now = id(ha_time).now();
+              return now.is_valid() &&
+                     id(ui_presenter)->is_normal_mode_active() &&
+                     id(sleep_mode_state) &&
+                     !id(ui_presenter)->is_sleep_mode_window_active(now.hour, now.minute);
+          then:
+            - script.execute: exit_sleep_mode
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     !id(sleep_mode_state) &&
+                     id(ui_presenter)->is_standby_active();
+          then:
+            - lambda: |-
+                auto set_hidden = [](lv_obj_t *obj, bool hidden) {
+                  if (hidden) {
+                    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+                  } else {
+                    lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+                  }
+                };
+                const std::string &state = id(standby_weather_state);
+                const bool known =
+                    state == "clear-night" ||
+                    state == "cloudy" ||
+                    state == "exceptional" ||
+                    state == "fog" ||
+                    state == "hail" ||
+                    state == "lightning" ||
+                    state == "lightning-rainy" ||
+                    state == "partlycloudy" ||
+                    state == "pouring" ||
+                    state == "rainy" ||
+                    state == "snowy" ||
+                    state == "snowy-rainy" ||
+                    state == "sunny" ||
+                    state == "windy" ||
+                    state == "windy-variant";
+                set_hidden(id(standby_weather_unknown_widget), known);
+                set_hidden(id(standby_weather_clear_night_widget), state != "clear-night");
+                set_hidden(id(standby_weather_cloudy_widget), state != "cloudy");
+                set_hidden(id(standby_weather_exceptional_widget), state != "exceptional");
+                set_hidden(id(standby_weather_fog_widget), state != "fog");
+                set_hidden(id(standby_weather_hail_widget), state != "hail");
+                set_hidden(id(standby_weather_lightning_widget), state != "lightning");
+                set_hidden(id(standby_weather_lightning_rainy_widget), state != "lightning-rainy");
+                set_hidden(id(standby_weather_partlycloudy_widget), state != "partlycloudy");
+                set_hidden(id(standby_weather_pouring_widget), state != "pouring");
+                set_hidden(id(standby_weather_rainy_widget), state != "rainy");
+                set_hidden(id(standby_weather_snowy_widget), state != "snowy");
+                set_hidden(id(standby_weather_snowy_rainy_widget), state != "snowy-rainy");
+                set_hidden(id(standby_weather_sunny_widget), state != "sunny");
+                set_hidden(id(standby_weather_windy_widget), state != "windy");
+                set_hidden(id(standby_weather_windy_variant_widget), state != "windy-variant");
+            - lvgl.widget.refresh: standby_temperature_widget
+            - lvgl.widget.refresh: standby_humidity_widget
+            - lambda: |-
+                lv_obj_add_flag(id(normal_device_wifi_online_widget), LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(id(normal_device_wifi_offline_widget), LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(id(normal_device_homeassistant_online_widget), LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(id(normal_device_homeassistant_offline_widget), LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(id(normal_device_index_text), LV_OBJ_FLAG_HIDDEN);
+            - lvgl.page.show: standby_page
+            - lvgl.widget.refresh: standby_time_widget
+            - lvgl.widget.refresh: standby_date_widget
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_device_detail_active) &&
+                     (id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_LIGHT) &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - lvgl.page.show: normal_light_page
+            - script.execute: refresh_normal_light_detail_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_device_detail_active) &&
+                     id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_CURTAIN &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - lvgl.page.show: normal_curtain_page
+            - script.execute: refresh_normal_curtain_detail_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_device_detail_active) &&
+                     id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - lvgl.page.show: normal_settings_page
+            - script.execute: refresh_normal_settings_detail_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_device_detail_active) &&
+                     id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_WIFI &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - lvgl.page.show: normal_settings_wifi_page
+            - script.execute: refresh_normal_settings_wifi_detail_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_device_detail_active) &&
+                     id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_BRIGHTNESS &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - lvgl.page.show: normal_settings_brightness_page
+            - script.execute: refresh_normal_settings_brightness_detail_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_device_detail_active) &&
+                     id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_KNOB &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - lvgl.page.show: normal_settings_knob_page
+            - script.execute: refresh_normal_settings_knob_detail_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_device_detail_active) &&
+                     id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SETTINGS_USER_MANUAL &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - lvgl.page.show: normal_settings_user_manual_page
+            - script.execute: refresh_normal_settings_user_manual_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_device_detail_active) &&
+                     id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_AUTOMATION &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - lvgl.page.show: normal_automation_page
+            - script.execute: refresh_normal_automation_detail_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_device_detail_active) &&
+                     (id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_SWITCH ||
+                      id(normal_device_detail_kind) == NORMAL_DEVICE_DETAIL_KIND_PLUG) &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - lvgl.page.show: normal_switch_page
+            - script.execute: refresh_normal_switch_detail_page
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_presenter)->is_normal_mode_active() &&
+                     wifi::global_wifi_component != nullptr &&
+                     wifi::global_wifi_component->has_sta() &&
+                     !wifi::global_wifi_component->get_sta().get_ssid().empty() &&
+                     id(normal_ha_added) &&
+                     id(normal_page_index) == 0 &&
+                     !id(normal_device_detail_active) &&
+                     !id(ui_presenter)->is_standby_active();
+          then:
+            - script.execute:
+                id: show_normal_device_entry_page
+                direction: 0

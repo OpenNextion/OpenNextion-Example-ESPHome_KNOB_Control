@@ -1,0 +1,89 @@
+esphome:
+  name: ${project_name}
+  friendly_name: ${project_friendly_name}
+  project:
+    name: opennextion.onx2424g013
+    version: ${product_firmware_version}
+  min_version: 2026.2.4
+  comment: "ONX2424G013"
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          set_normal_ui_storage_for_custom_logic(id(app_storage));
+          restore_device1_config_for_select(id(device1_config), id(api_server));
+          restore_device2_config_for_select(id(device2_config), id(api_server));
+          restore_device3_config_for_select(id(device3_config), id(api_server));
+          restore_device4_config_for_select(id(device4_config), id(api_server));
+          restore_device5_config_for_select(id(device5_config), id(api_server));
+          restore_device6_config_for_select(id(device6_config), id(api_server));
+          restore_device7_config_for_select(id(device7_config), id(api_server));
+          restore_device8_config_for_select(id(device8_config), id(api_server));
+          restore_device9_config_for_select(id(device9_config), id(api_server));
+          restore_device10_config_for_select(id(device10_config), id(api_server));
+          id(normal_device_count) = static_cast<int>(configured_normal_device_count());
+          restore_standby_weather_config_for_select(id(standby_weather_config), id(api_server));
+          subscribe_device_config_entities_from_selects(id(device1_config), id(device2_config),
+                                                        id(device3_config), id(device4_config), id(device5_config),
+                                                        id(device6_config), id(device7_config), id(device8_config),
+                                                        id(device9_config), id(device10_config),
+                                                        id(standby_weather_config), id(api_server),
+                                                        &id(standby_weather_entity_id),
+                                                        &id(standby_weather_state),
+                                                        &id(standby_weather_temperature),
+                                                        &id(standby_weather_temperature_unit),
+                                                        &id(standby_weather_humidity));
+          apply_device1_type_options(id(device1_type));
+          apply_device2_type_options(id(device2_type));
+          apply_device3_type_options(id(device3_type));
+          apply_device4_type_options(id(device4_type));
+          apply_device5_type_options(id(device5_type));
+          apply_device6_type_options(id(device6_type));
+          apply_device7_type_options(id(device7_type));
+          apply_device8_type_options(id(device8_type));
+          apply_device9_type_options(id(device9_type));
+          apply_device10_type_options(id(device10_type));
+          id(sleep_mode_enabled).publish_state(id(ui_presenter)->get_sleep_mode_enabled());
+          id(sleep_mode_start_time).publish_state(id(ui_presenter)->get_sleep_window_start_time());
+          id(sleep_mode_end_time).publish_state(id(ui_presenter)->get_sleep_window_end_time());
+          id(sleep_timeout_seconds).publish_state((float) id(ui_presenter)->get_sleep_timeout_ms() / 1000.0f);
+          id(ha_token).publish_state("");
+      # Force backlight off first to avoid boot-time flash before LVGL first frame.
+      - output.set_level:
+          id: lcd_backlight_pwm
+          level: 0%
+      - delay: 250ms
+      - light.turn_on:
+          id: lcd_backlight
+          brightness: 15%
+          transition_length: 0s
+      - delay: 1500ms
+      - light.turn_on:
+          id: lcd_backlight
+          brightness: ${lcd_backlight_default}
+          transition_length: 1200ms
+      - delay: 3000ms
+      - lambda: |-
+          id(boot_finished) = true;
+          id(mode_manager)->mark_boot_finished();
+  name_add_mac_suffix: true
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    components:
+      - espressif/esp_websocket_client^1.7.0
+    advanced:
+      loop_task_stack_size: 16384
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+globals:
+  - id: boot_finished
+    type: bool
+    initial_value: 'false'

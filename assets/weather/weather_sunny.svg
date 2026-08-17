@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="37" height="37" viewBox="0 0 17 17">
+<style>
+  .rain { fill: #30b3ff; }
+  .sun { fill: #fdd93c; }
+  .moon { fill: #fcf497; }
+  .cloud-back { fill: #d4d4d4; }
+  .cloud-front { fill: #f9f9f9; }
+  .snow { fill: #f9f9f9; stroke: #d4d4d4; stroke-width: 1; paint-order: stroke; }
+  .unknown { fill: #d4d4d4; }
+  .exceptional { fill: #d4d4d4; }
+</style>
+<path class="sun" d="m 14.39303,8.4033507 c 0,3.3114723 -2.684145,5.9956173 -5.9956169,5.9956173 -3.3114716,0 -5.9956168,-2.684145 -5.9956168,-5.9956173 0,-3.311471 2.6841452,-5.995617 5.9956168,-5.995617 3.3114719,0 5.9956169,2.684146 5.9956169,5.995617"/>
+</svg>
