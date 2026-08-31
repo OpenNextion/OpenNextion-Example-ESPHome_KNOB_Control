@@ -544,7 +544,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device1 type");
           update_device1_custom_type_from_option(x);
           id(device1_type).publish_state(x);
   - id: device2_config
@@ -573,7 +572,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device2 type");
           update_device2_custom_type_from_option(x);
           id(device2_type).publish_state(x);
   - id: device3_config
@@ -602,7 +600,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device3 type");
           update_device3_custom_type_from_option(x);
           id(device3_type).publish_state(x);
   - id: device4_config
@@ -631,7 +628,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device4 type");
           update_device4_custom_type_from_option(x);
           id(device4_type).publish_state(x);
   - id: device5_config
@@ -660,7 +656,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device5 type");
           update_device5_custom_type_from_option(x);
           id(device5_type).publish_state(x);
   - id: device6_config
@@ -689,7 +684,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device6 type");
           update_device6_custom_type_from_option(x);
           id(device6_type).publish_state(x);
   - id: device7_config
@@ -718,7 +712,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device7 type");
           update_device7_custom_type_from_option(x);
           id(device7_type).publish_state(x);
   - id: device8_config
@@ -747,7 +740,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device8 type");
           update_device8_custom_type_from_option(x);
           id(device8_type).publish_state(x);
   - id: device9_config
@@ -776,7 +768,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device9 type");
           update_device9_custom_type_from_option(x);
           id(device9_type).publish_state(x);
   - id: device10_config
@@ -805,7 +796,6 @@ select:
           format: "Chosen option: %s"
           args: ["x.c_str()"]
       - lambda: |-
-          id(sys_log).publish_state("Updating device10 type");
           update_device10_custom_type_from_option(x);
           id(device10_type).publish_state(x);
   - id: standby_weather_config
@@ -837,13 +827,7 @@ text_sensor:
     icon: "mdi:open-in-new"
     entity_category: diagnostic
     lambda: |-
-      return {"https://opennextion.github.io/OpenNextion-SKU-ONX2424G013/User%20Manual.html"};
-
-  - platform: template
-    id: sys_log
-    name: "Sys log"
-    icon: "mdi:alert-circle-outline"
-    entity_category: diagnostic
+      return {"https://opennextion.github.io/OpenNextion-Example-ESPHome_KNOB_Control/"};
 
 switch:
   - platform: gpio
