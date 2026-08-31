@@ -1,13 +1,13 @@
 {
     "name": "ONX2424G013",
-    "version": "0.1.1",
+    "version": "v1.0.1",
     "builds": [{
         "chipFamily": "ESP32-S3",
         "ota": {
-            "path": "onx2424g013.ota_v0.1.1.bin",
-            "md5": "b6355525344d5209ee42f01afaa603d5",
+            "path": "onx2424g013.ota_v1.0.1.bin",
+            "md5": "ef5c2437dc4db2deb269623539c83d46",
             "summary": "KNOB Control",
-            "release_url": "https://github.com/OpenNextion/OpenNextion-Example-ESPHome_KNOB_Control/releases/tag/v0.1.1"
+            "release_url": "https://github.com/OpenNextion/OpenNextion-Example-ESPHome_KNOB_Control/releases/tag/v1.0.1"
         }
     }]
 }

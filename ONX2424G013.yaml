@@ -14,7 +14,7 @@ substitutions:
   lcd_spi_data_rate: 40MHz
   lcd_backlight_default: 100%
   encoder_resolution: "4"
-  product_firmware_version: "0.1.0"
+  product_firmware_version: "1.0.1"
   product_firmware_manifest_url: "https://opennextion.github.io/OpenNextion-Example-ESPHome_KNOB_Control/firmware/manifest.json"
 
 packages:
@@ -36,10 +36,3 @@ esphome:
     - custom_logic.h
     - custom_logic_entity_sub.h
   name: ${project_name}
-  platformio_options:
-    build_flags:
-      - "-DENABLE_AUTHCODE_EFUSE"
-      #- "-DCONFIG_EFUSE_VIRTUAL"
-      # - "-DLV_USE_PERF_MONITOR=1"
-      # - "-DLV_USE_PERF_MONITOR_POS=LV_ALIGN_CENTER"
-      # - "-DLV_DISP_DEF_REFR_PERIOD=10"
