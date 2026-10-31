@@ -19,9 +19,19 @@ ESPHome firmware project for the ONX2424G013 round knob display. It uses an ESP3
 
 The main configuration is [ONX2424G013.yaml](ONX2424G013.yaml). The target hardware uses an ESP32-S3 with 16 MB flash, Octal PSRAM, and a GC9A01A round display; use this firmware only with compatible ONX2424G013 hardware.
 
+## Home Assistant entity list
+
+The display does not download the full Home Assistant entity registry. Instead it runs a `render_template` request over the Home Assistant WebSocket API, which returns only the entities the knob can control:
+
+- Domains returned: `switch`, `light`, `cover`, `automation`, and `weather`.
+- If at least one `switch`, `light`, `cover` or `automation` entity is labeled `knob` in Home Assistant, only those labeled entities are returned; `weather` entities are always included. The `knob` label filter and `label_entities()` require Home Assistant 2024.4 or newer.
+- Without a `knob` label, all entities of the supported domains are returned.
+- At most 200 entities are stored on the device; larger lists are truncated. The device also asks Home Assistant for at most 200 entries (`variables.limit`), so the template stops collecting once the cap is reached.
+- The ESPHome API large-message batching patch is applied automatically during code generation for both the PlatformIO build system (ESPHome ≤ 2026.6.x) and the native build system (ESPHome ≥ 2026.8); no manual step is needed.
+
 ## Requirements
 
-Build this project with **ESPHome 2026.6.3**. Docker is recommended to keep ESPHome, PlatformIO, and ESP-IDF versions consistent.
+Build this project with **ESPHome 2026.6.3** or newer. Both the 2026.6.x line and ESPHome 2026.8+ are supported (tested against 2026.10.1). Docker is recommended to keep ESPHome, PlatformIO, and ESP-IDF versions consistent.
 
 - Docker, or a local Python environment with `esphome==2026.6.3`
 - Network access for the first build to download dependencies
