@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <memory>
@@ -84,6 +85,7 @@ static constexpr size_t MAX_HA_AREA_NAME_LENGTH = 64;
 static constexpr size_t HA_WS_CLIENT_BUFFER_SIZE = 16 * 1024;
 static constexpr size_t HA_WS_RX_RESERVE_SIZE = HA_WS_CLIENT_BUFFER_SIZE * 2;
 static constexpr size_t MAX_HA_WS_TEXT_MESSAGE_LENGTH = 2 * 1024 * 1024;
+static constexpr size_t HA_WS_MAX_REGISTRY_PAYLOAD = 128 * 1024;
 static constexpr int HA_WS_NETWORK_TIMEOUT_MS = 30000;
 using PsramString = std::basic_string<char, std::char_traits<char>, esphome::RAMAllocator<char>>;
 using HaEntityOptionArray = std::array<std::string, MAX_HA_ENTITY_OPTION_COUNT>;
@@ -416,6 +418,7 @@ inline std::string build_ha_http_state_url(const std::string &raw_host, const st
 inline bool update_device_light_config_from_http_response(size_t slot, const std::string &entity_id,
                                                           const std::string &body);
 inline JsonDocument make_psram_json_document();
+inline std::string json_escape_string(const std::string &value);
 
 #ifdef USE_ESP32
 static esp_websocket_client_handle_t ha_ws_client = nullptr;
@@ -440,7 +443,7 @@ static uint32_t ha_ws_registry_fetch_started_ms = 0;
 static uint32_t ha_ws_transport_connected_ms = 0;
 static uint32_t ha_ws_auth_required_ms = 0;
 static uint32_t ha_ws_registry_fetch_attempt = 0;
-static uint32_t ha_ws_next_message_id = 1;
+static std::atomic<uint32_t> ha_ws_next_message_id{1};
 static uint32_t ha_ws_area_list_request_id = 0;
 static uint32_t ha_ws_entity_list_request_id = 0;
 static uint32_t ha_ws_device1_subscribe_request_id = 0;
@@ -469,6 +472,17 @@ static PsramString ha_ws_rx_text_buffer;
 #ifdef USE_PSRAM
 static esphome::json::SpiRamAllocator ha_json_allocator;
 #endif
+
+enum HaRegistryPayloadKind : uint8_t {
+  HA_REGISTRY_PAYLOAD_NONE = 0,
+  HA_REGISTRY_PAYLOAD_AREAS = 1,
+  HA_REGISTRY_PAYLOAD_ENTITIES = 2,
+};
+static PsramString ha_ws_pending_registry_payload;
+static esphome::Mutex ha_ws_pending_payload_mutex;
+static std::atomic<uint8_t> ha_ws_pending_registry_kind{HA_REGISTRY_PAYLOAD_NONE};
+static std::atomic<uint32_t> ha_ws_pending_unsubscribe_id{0};
+static std::atomic<bool> ha_ws_drop_text_message{false};
 
 inline void log_ha_registry_memory(const char *stage) {
   const char *label = stage != nullptr ? stage : "unknown";
@@ -1120,6 +1134,45 @@ inline void load_ha_areas_if_needed() {
   cached_ha_areas = stored;
 }
 
+inline void trim_incomplete_utf8_tail(std::string &text) {
+  size_t length = text.size();
+  size_t start = length;
+  while (start > 0 && length - start < 4 &&
+         (static_cast<unsigned char>(text[start - 1]) & 0xC0) == 0x80) {
+    --start;
+  }
+  if (start == 0) {
+    text.clear();
+    return;
+  }
+  const unsigned char lead = static_cast<unsigned char>(text[start - 1]);
+  const size_t needed = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+  if (length - (start - 1) < needed) {
+    text.resize(start - 1);
+  }
+}
+
+inline void trim_incomplete_utf8_tail(char *buffer, size_t size) {
+  if (buffer == nullptr || size == 0) {
+    return;
+  }
+  const size_t length = strnlen(buffer, size);
+  size_t start = length;
+  while (start > 0 && length - start < 4 &&
+         (static_cast<unsigned char>(buffer[start - 1]) & 0xC0) == 0x80) {
+    --start;
+  }
+  if (start == 0) {
+    buffer[0] = '\0';
+    return;
+  }
+  const unsigned char lead = static_cast<unsigned char>(buffer[start - 1]);
+  const size_t needed = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+  if (length - (start - 1) < needed) {
+    buffer[start - 1] = '\0';
+  }
+}
+
 inline void load_ha_entities_if_needed() {
   if (ha_entities_loaded) {
     return;
@@ -1165,6 +1218,9 @@ inline void load_ha_entities_if_needed() {
         entity.entity_id[MAX_HA_ENTITY_ID_LENGTH] = '\0';
         entity.friendly_name[MAX_HA_FRIENDLY_NAME_LENGTH] = '\0';
         entity.area_name[MAX_HA_AREA_NAME_LENGTH] = '\0';
+        trim_incomplete_utf8_tail(entity.entity_id, sizeof(entity.entity_id));
+        trim_incomplete_utf8_tail(entity.friendly_name, sizeof(entity.friendly_name));
+        trim_incomplete_utf8_tail(entity.area_name, sizeof(entity.area_name));
         cached.entities[cached.count++] = entity;
       }
     }
@@ -1202,6 +1258,18 @@ template<size_t N> inline void copy_string_to_fixed_buffer(const std::string &va
   const size_t copy_length = std::min(value.size(), N - 1);
   if (copy_length > 0) {
     memcpy(target, value.data(), copy_length);
+    size_t start = copy_length;
+    while (start > 0 && copy_length - start < 4 &&
+           (static_cast<unsigned char>(target[start - 1]) & 0xC0) == 0x80) {
+      --start;
+    }
+    if (start > 0) {
+      const unsigned char lead = static_cast<unsigned char>(target[start - 1]);
+      const size_t needed = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+      if (copy_length - (start - 1) < needed) {
+        target[start - 1] = '\0';
+      }
+    }
   }
 }
 
@@ -1475,10 +1543,26 @@ inline bool save_device2_config_entity_id(const std::string &entity_id);
 inline bool is_supported_ha_entity_id(const char *entity_id);
 
 #ifdef USE_ESP32
+static const char *const HA_ENTITY_LIST_TEMPLATE =
+    "{%- set dom = ['switch','light','cover','automation'] -%}"
+    "{%- set lab = label_entities('knob') | select('match', '^(switch|light|cover|automation)\\.') | list -%}"
+    "{%- set ns = namespace(o=[]) -%}"
+    "{%- for s in states -%}"
+    "{%- if s.domain == 'weather' and (ns.o | count) < limit -%}"
+    "{%- set ns.o = ns.o + [dict(ei=s.entity_id, en=s.name, ai=area_id(s.entity_id) or '')] -%}"
+    "{%- endif -%}"
+    "{%- endfor -%}"
+    "{%- for s in states -%}"
+    "{%- if s.domain in dom and (lab | count == 0 or s.entity_id in lab) and (ns.o | count) < limit -%}"
+    "{%- set ns.o = ns.o + [dict(ei=s.entity_id, en=s.name, ai=area_id(s.entity_id) or '')] -%}"
+    "{%- endif -%}"
+    "{%- endfor -%}"
+    "{{ ns.o | tojson }}";
+
 inline uint32_t ha_ws_next_request_id() {
-  uint32_t request_id = ha_ws_next_message_id++;
-  if (ha_ws_next_message_id == 0) {
-    ha_ws_next_message_id = 1;
+  uint32_t request_id = ha_ws_next_message_id.fetch_add(1, std::memory_order_relaxed);
+  if (request_id == 0) {
+    request_id = ha_ws_next_message_id.fetch_add(1, std::memory_order_relaxed);
   }
   return request_id;
 }
@@ -1491,13 +1575,16 @@ inline bool ha_ws_send_area_list_request() {
   char request[96];
   snprintf(request, sizeof(request), "{\"id\":%u,\"type\":\"config/area_registry/list\"}",
            static_cast<unsigned>(request_id));
+  ha_ws_area_list_request_id = request_id;
   const int sent = esp_websocket_client_send_text(ha_ws_client, request, strlen(request), pdMS_TO_TICKS(1000));
   if (sent < 0 || static_cast<size_t>(sent) != strlen(request)) {
+    if (ha_ws_area_list_request_id == request_id) {
+      ha_ws_area_list_request_id = 0;
+    }
     ESP_LOGW(TAG, "failed to request HA area list over websocket: result_bytes=%d expected_bytes=%u",
              sent, static_cast<unsigned>(strlen(request)));
     return false;
   }
-  ha_ws_area_list_request_id = request_id;
   ha_ws_entity_list_pending = false;
   ESP_LOGI(TAG, "requested HA area list over websocket: request_id=%u bytes=%u",
            static_cast<unsigned>(request_id), static_cast<unsigned>(strlen(request)));
@@ -1509,19 +1596,23 @@ inline bool ha_ws_send_entity_list_request() {
     return false;
   }
   const uint32_t request_id = ha_ws_next_request_id();
-  char request[96];
-  snprintf(request, sizeof(request), "{\"id\":%u,\"type\":\"config/entity_registry/list_for_display\"}",
-           static_cast<unsigned>(request_id));
-  const int sent = esp_websocket_client_send_text(ha_ws_client, request, strlen(request), pdMS_TO_TICKS(1000));
-  if (sent < 0 || static_cast<size_t>(sent) != strlen(request)) {
-    ESP_LOGW(TAG, "failed to request HA entity list over websocket: result_bytes=%d expected_bytes=%u",
-             sent, static_cast<unsigned>(strlen(request)));
+  const std::string request = std::string("{\"id\":") + std::to_string(request_id) +
+                              ",\"type\":\"render_template\",\"report_errors\":true,\"strict\":false" +
+                              ",\"variables\":{\"limit\":" + std::to_string(MAX_HA_ENTITY_COUNT) + "}" +
+                              ",\"template\":\"" + json_escape_string(HA_ENTITY_LIST_TEMPLATE) + "\"}";
+  ha_ws_entity_list_request_id = request_id;
+  const int sent = esp_websocket_client_send_text(ha_ws_client, request.data(), request.size(), pdMS_TO_TICKS(1000));
+  if (sent < 0 || static_cast<size_t>(sent) != request.size()) {
+    if (ha_ws_entity_list_request_id == request_id) {
+      ha_ws_entity_list_request_id = 0;
+    }
+    ESP_LOGW(TAG, "failed to request HA entity list over websocket: result_bytes=%d expected_bytes=%u", sent,
+             static_cast<unsigned>(request.size()));
     return false;
   }
-  ha_ws_entity_list_request_id = request_id;
   ha_ws_entity_list_pending = false;
-  ESP_LOGI(TAG, "requested HA entity list over websocket: request_id=%u bytes=%u",
-           static_cast<unsigned>(request_id), static_cast<unsigned>(strlen(request)));
+  ESP_LOGI(TAG, "requested HA entity list over websocket via render_template: request_id=%u bytes=%u",
+           static_cast<unsigned>(request_id), static_cast<unsigned>(request.size()));
   return true;
 }
 
@@ -1568,11 +1659,12 @@ inline bool ha_ws_send_unsubscribe_request(uint32_t subscription_id) {
   snprintf(request, sizeof(request), "{\"id\":%u,\"type\":\"unsubscribe_events\",\"subscription\":%u}",
            static_cast<unsigned>(request_id), static_cast<unsigned>(subscription_id));
   const int sent = esp_websocket_client_send_text(ha_ws_client, request, strlen(request), pdMS_TO_TICKS(1000));
-  if (sent < 0) {
-    ESP_LOGW(TAG, "failed to unsubscribe device1 entity over websocket");
+  if (sent < 0 || static_cast<size_t>(sent) != strlen(request)) {
+    ESP_LOGW(TAG, "failed to unsubscribe HA websocket subscription: subscription=%u result_bytes=%d",
+             static_cast<unsigned>(subscription_id), sent);
     return false;
   }
-  ESP_LOGI(TAG, "unsubscribed device1 entity: subscription=%u", static_cast<unsigned>(subscription_id));
+  ESP_LOGI(TAG, "unsubscribed HA websocket subscription: subscription=%u", static_cast<unsigned>(subscription_id));
   return true;
 }
 
@@ -1903,6 +1995,43 @@ inline void ha_ws_release_rx_text_buffer() {
   ha_ws_rx_text_buffer.swap(empty);
 }
 
+inline bool ha_ws_queue_registry_payload(uint8_t kind) {
+  esphome::LockGuard guard(ha_ws_pending_payload_mutex);
+  if (ha_ws_pending_registry_kind.load(std::memory_order_relaxed) != HA_REGISTRY_PAYLOAD_NONE) {
+    ESP_LOGW(TAG, "HA registry payload dropped: previous payload is still pending");
+    return false;
+  }
+  ha_ws_pending_registry_payload.swap(ha_ws_rx_text_buffer);
+  ha_ws_pending_registry_kind.store(kind, std::memory_order_release);
+  return true;
+}
+
+inline bool ha_ws_take_pending_registry_payload(PsramString &payload, uint8_t &kind) {
+  esphome::LockGuard guard(ha_ws_pending_payload_mutex);
+  kind = ha_ws_pending_registry_kind.exchange(HA_REGISTRY_PAYLOAD_NONE, std::memory_order_acq_rel);
+  if (kind == HA_REGISTRY_PAYLOAD_NONE) {
+    return false;
+  }
+  payload.swap(ha_ws_pending_registry_payload);
+  return true;
+}
+
+inline void ha_ws_drop_pending_registry_payload() {
+  PsramString dropped;
+  bool had_payload = false;
+  {
+    esphome::LockGuard guard(ha_ws_pending_payload_mutex);
+    had_payload = ha_ws_pending_registry_kind.exchange(HA_REGISTRY_PAYLOAD_NONE,
+                                                       std::memory_order_acq_rel) != HA_REGISTRY_PAYLOAD_NONE;
+    if (had_payload) {
+      dropped.swap(ha_ws_pending_registry_payload);
+    }
+  }
+  if (had_payload) {
+    ESP_LOGW(TAG, "dropping queued HA registry payload");
+  }
+}
+
 inline void ha_ws_finish_registry_fetch(const char *reason) {
   ESP_LOGI(TAG, "HA websocket registry fetch finished: %s", reason != nullptr ? reason : "unknown");
   log_ha_registry_memory("registry fetch finishing");
@@ -1912,7 +2041,8 @@ inline void ha_ws_finish_registry_fetch(const char *reason) {
   ha_ws_entity_list_send_pending = false;
   ha_ws_area_list_request_id = 0;
   ha_ws_entity_list_request_id = 0;
-  ha_ws_release_rx_text_buffer();
+  ha_ws_drop_text_message.store(true, std::memory_order_release);
+  ha_ws_drop_pending_registry_payload();
   ha_ws_stop_requested = true;
   ha_ws_set_connected(false, nullptr);
 }
@@ -3157,86 +3287,46 @@ inline void ha_ws_handle_text_payload(const char *data, int len) {
     ha_ws_finish_registry_fetch("auth invalid");
     return;
   }
-  if ((ha_ws_area_list_request_id != 0 || ha_ws_entity_list_request_id != 0) &&
-      (ha_ws_payload_contains(data, len, "\"type\":\"result\"") ||
-       ha_ws_payload_contains(data, len, "\"type\": \"result\""))) {
-    const uint32_t parse_started_ms = millis();
-    ESP_LOGI(TAG, "HA websocket result JSON parse begin: payload_bytes=%u area_request_id=%u entity_request_id=%u",
-             static_cast<unsigned>(len), static_cast<unsigned>(ha_ws_area_list_request_id),
-             static_cast<unsigned>(ha_ws_entity_list_request_id));
-    log_ha_registry_memory("before result JSON parse");
-    JsonDocument doc = make_psram_json_document();
-    DeserializationError error = deserializeJson(doc, data, static_cast<size_t>(len));
-    if (error) {
-      ESP_LOGE(TAG, "HA websocket result JSON parse failed: %s", error.c_str());
-      ha_ws_finish_registry_fetch("result JSON parse failed");
+  const bool is_result_message = ha_ws_payload_contains(data, len, "\"type\":\"result\"") ||
+                                 ha_ws_payload_contains(data, len, "\"type\": \"result\"");
+  const bool is_event_message = ha_ws_payload_contains(data, len, "\"type\":\"event\"") ||
+                                ha_ws_payload_contains(data, len, "\"type\": \"event\"");
+  if (is_event_message && ha_ws_entity_list_request_id != 0) {
+    const uint32_t entity_request_id = ha_ws_entity_list_request_id;
+    ha_ws_entity_list_request_id = 0;
+    if (!ha_ws_queue_registry_payload(HA_REGISTRY_PAYLOAD_ENTITIES)) {
+      ha_ws_finish_registry_fetch("entity payload queue failed");
       return;
     }
-    ESP_LOGI(TAG, "HA websocket result JSON parse complete: elapsed_ms=%u overflowed=%s",
-             static_cast<unsigned>(millis() - parse_started_ms), doc.overflowed() ? "YES" : "NO");
-    log_ha_registry_memory("after result JSON parse");
-    const uint32_t response_id = doc["id"] | 0;
-    if (response_id != ha_ws_area_list_request_id && response_id != ha_ws_entity_list_request_id) {
+    ha_ws_pending_unsubscribe_id.store(entity_request_id, std::memory_order_release);
+    return;
+  }
+  if (is_result_message && ha_ws_area_list_request_id != 0) {
+    const uint32_t area_request_id = ha_ws_area_list_request_id;
+    ha_ws_area_list_request_id = 0;
+    ESP_LOGI(TAG, "HA area list response queued for main loop: request_id=%u payload_bytes=%u",
+             static_cast<unsigned>(area_request_id), static_cast<unsigned>(len));
+    if (!ha_ws_queue_registry_payload(HA_REGISTRY_PAYLOAD_AREAS)) {
+      ha_ws_finish_registry_fetch("area payload queue failed");
+    }
+    return;
+  }
+  if (is_result_message && ha_ws_entity_list_request_id != 0) {
+    JsonDocument ack = make_psram_json_document();
+    DeserializationError ack_error = deserializeJson(ack, data, static_cast<size_t>(len));
+    if (ack_error) {
+      ESP_LOGE(TAG, "HA render_template ack JSON parse failed: %s", ack_error.c_str());
+      ha_ws_finish_registry_fetch("render_template ack parse failed");
       return;
     }
-    const bool is_area_response = response_id == ha_ws_area_list_request_id;
-    if (is_area_response) {
-      ha_ws_area_list_request_id = 0;
-    } else {
-      ha_ws_entity_list_request_id = 0;
-    }
-    if (!(doc["success"] | false)) {
-      ESP_LOGW(TAG, "HA websocket registry request failed");
+    if (!(ack["success"] | false)) {
+      ESP_LOGW(TAG, "HA render_template request failed");
       ha_ws_finish_registry_fetch("registry request failed");
       return;
     }
-    JsonVariantConst result_variant = doc["result"];
-    if (is_area_response) {
-      JsonArrayConst areas = result_variant.as<JsonArrayConst>();
-      if (areas.isNull()) {
-        ESP_LOGW(TAG, "HA websocket area list response missing result array");
-        ha_ws_finish_registry_fetch("area response missing result");
-        return;
-      }
-      ESP_LOGI(TAG, "HA websocket area list response has %u item(s)", static_cast<unsigned>(areas.size()));
-      if (!parse_and_store_ha_areas(areas)) {
-        ha_ws_finish_registry_fetch("area storage failed");
-        return;
-      }
-      ha_ws_entity_list_send_pending = true;
-      return;
-    }
-
-    JsonArrayConst result = result_variant.as<JsonArrayConst>();
-    if (result.isNull()) {
-      result = result_variant["entities"].as<JsonArrayConst>();
-    }
-    if (result.isNull()) {
-      ESP_LOGW(TAG, "HA websocket entity list response missing entities array");
-      ha_ws_finish_registry_fetch("entity response missing result");
-      return;
-    }
-    ESP_LOGI(TAG, "HA websocket entity list response has %u display item(s)", static_cast<unsigned>(result.size()));
-    if (parse_and_store_ha_entity_registry_entities(result)) {
-      ESP_LOGI(TAG, "HA entity select refresh sequence begin: device_slots=%u",
-               static_cast<unsigned>(CONFIGURABLE_DEVICE_SLOT_COUNT));
-      log_ha_registry_memory("before all select refreshes");
-      bool options_changed = false;
-      for (size_t slot = 0; slot < CONFIGURABLE_DEVICE_SLOT_COUNT; slot++) {
-        options_changed = apply_device_config_options(slot, ha_ws_device_entity_select(slot)) || options_changed;
-      }
-      ESP_LOGI(TAG, "HA standby weather select refresh begin");
-      options_changed = apply_standby_weather_config_options(ha_ws_standby_weather_entity_select) || options_changed;
-      ESP_LOGI(TAG, "HA entity select refresh sequence complete: options_changed=%s",
-               options_changed ? "YES" : "NO");
-      log_ha_registry_memory("after all select refreshes");
-      if (options_changed) {
-        ESP_LOGI(TAG, "HA entity options changed; disconnecting API clients for option refresh");
-        disconnect_all_clients_for_refresh(ha_ws_entity_api_server);
-        ESP_LOGI(TAG, "HA API client disconnect request complete");
-      }
-    }
-    ha_ws_finish_registry_fetch("registry fetch complete");
+    ESP_LOGI(TAG, "HA render_template request acknowledged (result=%s); waiting for event",
+             ack["result"].isNull() ? "null" : "non-null");
+    return;
   }
 
 }
@@ -3246,6 +3336,16 @@ inline void ha_ws_handle_text_event(const esp_websocket_event_data_t *data) {
     return;
   }
   if (data->payload_offset == 0) {
+    ha_ws_drop_text_message.store(false, std::memory_order_release);
+    if (ha_ws_registry_fetch_active && data->payload_len > 0 &&
+        static_cast<size_t>(data->payload_len) > HA_WS_MAX_REGISTRY_PAYLOAD) {
+      ESP_LOGW(TAG, "HA registry response too large: payload_bytes=%d limit=%u; aborting fetch",
+               data->payload_len, static_cast<unsigned>(HA_WS_MAX_REGISTRY_PAYLOAD));
+      ha_ws_drop_text_message.store(true, std::memory_order_release);
+      ha_ws_release_rx_text_buffer();
+      ha_ws_finish_registry_fetch("payload too large");
+      return;
+    }
     if (ha_ws_rx_text_buffer.capacity() > HA_WS_RX_RESERVE_SIZE) {
       ha_ws_release_rx_text_buffer();
     } else {
@@ -3255,14 +3355,27 @@ inline void ha_ws_handle_text_event(const esp_websocket_event_data_t *data) {
       ha_ws_rx_text_buffer.reserve(std::min<size_t>(data->payload_len, HA_WS_RX_RESERVE_SIZE));
     }
   }
+  if (ha_ws_drop_text_message.load(std::memory_order_acquire)) {
+    return;
+  }
   if (ha_ws_rx_text_buffer.size() + data->data_len > MAX_HA_WS_TEXT_MESSAGE_LENGTH) {
     ESP_LOGW(TAG, "HA websocket payload too large; drop message len=%d offset=%d total=%d", data->data_len,
              data->payload_offset, data->payload_len);
+    ha_ws_drop_text_message.store(true, std::memory_order_release);
     ha_ws_release_rx_text_buffer();
     ha_ws_finish_registry_fetch("payload too large");
     return;
   }
   ha_ws_rx_text_buffer.append(data->data_ptr, data->data_len);
+  if (ha_ws_registry_fetch_active && ha_ws_rx_text_buffer.size() > HA_WS_MAX_REGISTRY_PAYLOAD) {
+    ESP_LOGW(TAG, "HA registry response too large: accumulated_bytes=%u limit=%u; aborting fetch",
+             static_cast<unsigned>(ha_ws_rx_text_buffer.size()),
+             static_cast<unsigned>(HA_WS_MAX_REGISTRY_PAYLOAD));
+    ha_ws_drop_text_message.store(true, std::memory_order_release);
+    ha_ws_release_rx_text_buffer();
+    ha_ws_finish_registry_fetch("payload too large");
+    return;
+  }
   const size_t received_end = static_cast<size_t>(data->payload_offset) + static_cast<size_t>(data->data_len);
   if (received_end < static_cast<size_t>(data->payload_len)) {
     return;
@@ -3378,7 +3491,100 @@ inline bool start_ha_websocket_client(const std::string &uri) {
   return true;
 }
 
+inline void process_pending_ha_registry_response() {
+  uint8_t kind = HA_REGISTRY_PAYLOAD_NONE;
+  PsramString payload;
+  if (!ha_ws_take_pending_registry_payload(payload, kind)) {
+    return;
+  }
+  if (!ha_ws_registry_fetch_active || payload.empty()) {
+    ESP_LOGW(TAG, "HA registry payload dropped: fetch inactive or payload empty");
+    return;
+  }
+  const uint32_t parse_started_ms = millis();
+  ESP_LOGI(TAG, "HA registry payload processing begin: kind=%u payload_bytes=%u task=%s",
+           static_cast<unsigned>(kind), static_cast<unsigned>(payload.size()), pcTaskGetName(nullptr));
+  log_ha_registry_memory("before main loop registry parse");
+  JsonDocument doc = make_psram_json_document();
+  DeserializationError error = deserializeJson(doc, payload.data(), payload.size());
+  if (error) {
+    ESP_LOGE(TAG, "HA registry payload JSON parse failed: %s", error.c_str());
+    ha_ws_finish_registry_fetch("result JSON parse failed");
+    return;
+  }
+  if (kind == HA_REGISTRY_PAYLOAD_AREAS) {
+    JsonArrayConst areas = doc["result"].as<JsonArrayConst>();
+    if (areas.isNull()) {
+      ESP_LOGW(TAG, "HA websocket area list response missing result array");
+      ha_ws_finish_registry_fetch("area response missing result");
+      return;
+    }
+    ESP_LOGI(TAG, "HA websocket area list response has %u item(s)", static_cast<unsigned>(areas.size()));
+    const bool stored = parse_and_store_ha_areas(areas);
+    if (!stored) {
+      ha_ws_finish_registry_fetch("area storage failed");
+      return;
+    }
+    ha_ws_entity_list_send_pending = true;
+    return;
+  }
+
+  JsonVariantConst result_variant = doc["event"]["result"];
+  JsonDocument entity_doc;
+  JsonArrayConst result = result_variant.as<JsonArrayConst>();
+  if (result.isNull()) {
+    const char *result_text = result_variant.as<const char *>();
+    if (result_text != nullptr && result_text[0] != '\0') {
+      entity_doc = make_psram_json_document();
+      DeserializationError entity_error = deserializeJson(entity_doc, result_text);
+      if (entity_error) {
+        ESP_LOGE(TAG, "HA render_template result JSON parse failed: %s", entity_error.c_str());
+        ha_ws_finish_registry_fetch("render_template result parse failed");
+        return;
+      }
+      result = entity_doc.as<JsonArrayConst>();
+      if (result.isNull()) {
+        result = entity_doc["entities"].as<JsonArrayConst>();
+      }
+    }
+  }
+  if (result.isNull()) {
+    ESP_LOGW(TAG, "HA render_template result is not an array (string=%s)",
+             result_variant.is<const char *>() ? "YES" : "NO");
+    ha_ws_finish_registry_fetch("render_template result not an array");
+    return;
+  }
+  ESP_LOGI(TAG, "HA render_template result has %u display item(s) (elapsed_ms=%u)",
+           static_cast<unsigned>(result.size()),
+           static_cast<unsigned>(millis() - parse_started_ms));
+  if (parse_and_store_ha_entity_registry_entities(result)) {
+    ESP_LOGI(TAG, "HA entity select refresh sequence begin: device_slots=%u",
+             static_cast<unsigned>(CONFIGURABLE_DEVICE_SLOT_COUNT));
+    log_ha_registry_memory("before all select refreshes");
+    bool options_changed = false;
+    for (size_t slot = 0; slot < CONFIGURABLE_DEVICE_SLOT_COUNT; slot++) {
+      options_changed = apply_device_config_options(slot, ha_ws_device_entity_select(slot)) || options_changed;
+    }
+    ESP_LOGI(TAG, "HA standby weather select refresh begin");
+    options_changed = apply_standby_weather_config_options(ha_ws_standby_weather_entity_select) || options_changed;
+    ESP_LOGI(TAG, "HA entity select refresh sequence complete: options_changed=%s",
+             options_changed ? "YES" : "NO");
+    log_ha_registry_memory("after all select refreshes");
+    if (options_changed) {
+      ESP_LOGI(TAG, "HA entity options changed; queueing API client disconnect for option refresh");
+      disconnect_all_clients_for_refresh(ha_ws_entity_api_server);
+    }
+  }
+  log_ha_registry_memory("after main loop registry processing");
+  ha_ws_finish_registry_fetch("registry fetch complete");
+}
+
 inline bool maintain_ha_websocket(const std::string &host, bool wifi_connected, bool *connected_out) {
+  process_pending_ha_registry_response();
+  const uint32_t unsubscribe_id = ha_ws_pending_unsubscribe_id.exchange(0, std::memory_order_acq_rel);
+  if (unsubscribe_id != 0) {
+    ha_ws_send_unsubscribe_request(unsubscribe_id);
+  }
   process_pending_api_client_refresh();
 
   const bool previous_connected = ha_ws_reported_connected;
@@ -3480,6 +3686,8 @@ inline bool request_ha_entity_list_over_websocket(const std::string &host,
   }
 
   ha_ws_destroy_client();
+  ha_ws_drop_pending_registry_payload();
+  ha_ws_pending_unsubscribe_id.store(0, std::memory_order_release);
   ha_ws_registry_fetch_active = true;
   ha_ws_registry_fetch_started_ms = millis();
   ha_ws_transport_connected_ms = ha_ws_registry_fetch_started_ms;
@@ -4245,10 +4453,12 @@ inline std::string build_ha_entity_config_option(const StoredHaEntity &entity) {
   std::string option;
   if (entity.area_name[0] != '\0') {
     option += entity.area_name;
+    trim_incomplete_utf8_tail(option);
     option += " / ";
   }
   if (entity.friendly_name[0] != '\0') {
     option += entity.friendly_name;
+    trim_incomplete_utf8_tail(option);
     option += " / ";
   }
   option += entity.entity_id;
@@ -4309,8 +4519,9 @@ inline size_t build_standby_weather_config_options(HaEntityOptionArray &options)
   return build_filtered_config_options(options, is_supported_standby_weather_entity_id);
 }
 
-inline bool select_options_match(const esphome::FixedVector<const char *> &current_options,
-                                 const HaEntityOptionArray &new_options, size_t count) {
+template<typename TOptions>
+inline bool select_options_match(const TOptions &current_options, const HaEntityOptionArray &new_options,
+                                 size_t count) {
   if (current_options.size() != count) {
     return false;
   }
@@ -4485,7 +4696,7 @@ inline bool save_device_config_from_select(size_t slot, esphome::select::Select 
   if (!is_configurable_device_slot(slot) || my_select == nullptr) {
     return false;
   }
-  const std::string entity_id = extract_entity_id_from_device1_option(my_select->state);
+  const std::string entity_id = extract_entity_id_from_device1_option(my_select->current_option().str());
   load_device_config_if_needed(slot);
   const std::string previous_entity_id = cached_device_entity_id(slot);
   const bool changed = previous_entity_id != entity_id;
@@ -4548,7 +4759,7 @@ inline bool save_standby_weather_config_from_select(esphome::select::Select *my_
   if (my_select == nullptr) {
     return false;
   }
-  const std::string entity_id = extract_entity_id_from_device1_option(my_select->state);
+  const std::string entity_id = extract_entity_id_from_device1_option(my_select->current_option().str());
   load_standby_weather_config_if_needed();
   const std::string previous_entity_id = cached_standby_weather_entity_id;
   const bool changed = previous_entity_id != entity_id;
