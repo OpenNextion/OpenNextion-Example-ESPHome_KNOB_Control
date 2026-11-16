@@ -1545,7 +1545,6 @@ inline bool is_supported_ha_entity_id(const char *entity_id);
 #ifdef USE_ESP32
 static const char *const HA_ENTITY_LIST_TEMPLATE =
     "{%- set dom = ['switch','light','cover','automation'] -%}"
-    "{%- set lab = label_entities('knob') | select('match', '^(switch|light|cover|automation)\\.') | list -%}"
     "{%- set ns = namespace(o=[]) -%}"
     "{%- for s in states -%}"
     "{%- if s.domain == 'weather' and (ns.o | count) < limit -%}"
@@ -1553,7 +1552,7 @@ static const char *const HA_ENTITY_LIST_TEMPLATE =
     "{%- endif -%}"
     "{%- endfor -%}"
     "{%- for s in states -%}"
-    "{%- if s.domain in dom and (lab | count == 0 or s.entity_id in lab) and (ns.o | count) < limit -%}"
+    "{%- if s.domain in dom and (ns.o | count) < limit -%}"
     "{%- set ns.o = ns.o + [dict(ei=s.entity_id, en=s.name, ai=area_id(s.entity_id) or '')] -%}"
     "{%- endif -%}"
     "{%- endfor -%}"

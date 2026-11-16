@@ -23,9 +23,7 @@ The main configuration is [ONX2424G013.yaml](ONX2424G013.yaml). The target hardw
 
 The display does not download the full Home Assistant entity registry. Instead it runs a `render_template` request over the Home Assistant WebSocket API, which returns only the entities the knob can control:
 
-- Domains returned: `switch`, `light`, `cover`, `automation`, and `weather`.
-- If at least one `switch`, `light`, `cover` or `automation` entity is labeled `knob` in Home Assistant, only those labeled entities are returned; `weather` entities are always included. The `knob` label filter and `label_entities()` require Home Assistant 2024.4 or newer.
-- Without a `knob` label, all entities of the supported domains are returned.
+- Domains returned: `switch`, `light`, `cover`, and `automation`; `weather` entities are always included first.
 - At most 200 entities are stored on the device; larger lists are truncated. The device also asks Home Assistant for at most 200 entries (`variables.limit`), so the template stops collecting once the cap is reached.
 - The ESPHome API large-message batching patch is applied automatically during code generation for both the PlatformIO build system (ESPHome ≤ 2026.6.x) and the native build system (ESPHome ≥ 2026.8); no manual step is needed.
 
@@ -33,7 +31,7 @@ The display does not download the full Home Assistant entity registry. Instead i
 
 Compared to upstream v1.0.1, this fork fixes the "Refresh Entity List" hang and crash on large Home Assistant instances plus several follow-up issues:
 
-- The entity list is fetched with a single `render_template` request over the Home Assistant WebSocket API (server-side template keeps only the supported domains and honours the `knob` label). Responses are capped at 200 entities / 128 KB, and the `render_template` subscription is always unsubscribed afterwards.
+- The entity list is fetched with a single `render_template` request over the Home Assistant WebSocket API (the server-side template keeps only the supported domains and always includes `weather` first). Responses are capped at 200 entities / 128 KB, and the `render_template` subscription is always unsubscribed afterwards.
 - Registry parsing, select-option rebuild, config commit, and API-client refresh run in the main loop; the WebSocket task only accumulates bytes and hands the payload over through a mutex-protected pending buffer. Large responses no longer block the UI or exhaust memory.
 - Entity names are truncated on UTF-8 character boundaries (at storage time, when building select options, and when loading persisted entities). Previously a Russian name cut mid-character produced invalid UTF-8, and Home Assistant rejected the whole `ListEntitiesSelectResponse` with `String field had bad UTF-8`, disconnecting and reconnecting in a loop.
 - The ESPHome API large-message batching workaround (needed when a Select carries ~200 options) is applied automatically during code generation, so it works both on the PlatformIO build (ESPHome ≤ 2026.6.x) and on the native CMake/ESP-IDF build (ESPHome ≥ 2026.8), where `extra_scripts` no longer runs.
