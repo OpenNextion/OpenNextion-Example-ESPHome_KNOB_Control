@@ -107,7 +107,7 @@ inline std::string entity_id_from_select(esphome::select::Select *select) {
   if (select == nullptr) {
     return "";
   }
-  return custom_logic::extract_entity_id_from_device1_option(select->state);
+  return custom_logic::extract_entity_id_from_device1_option(select->current_option().str());
 }
 
 inline const std::array<const char *, 8> &light_attributes() {

@@ -198,7 +198,7 @@ button:
             if (select == nullptr) {
               return 0;
             }
-            const std::string entity_id = extract_entity_id_from_device1_option(select->state);
+            const std::string entity_id = extract_entity_id_from_device1_option(select->current_option().str());
             return !entity_id.empty() && is_supported_normal_device_entity_id(entity_id.c_str()) ? 1 : 0;
           };
           const int configured_device_count =
@@ -256,12 +256,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device1_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device1_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device1_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device1_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -272,7 +272,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device1_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device1_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device1_config).current_option().str()), body)) {
                           apply_device1_type_options(id(device1_type));
                         }
                 on_error:
@@ -282,12 +282,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device2_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device2_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device2_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device2_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -298,7 +298,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device2_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device2_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device2_config).current_option().str()), body)) {
                           apply_device2_type_options(id(device2_type));
                         }
                 on_error:
@@ -308,12 +308,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device3_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device3_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device3_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device3_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -324,7 +324,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device3_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device3_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device3_config).current_option().str()), body)) {
                           apply_device3_type_options(id(device3_type));
                         }
                 on_error:
@@ -334,12 +334,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device4_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device4_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device4_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device4_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -350,7 +350,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device4_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device4_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device4_config).current_option().str()), body)) {
                           apply_device4_type_options(id(device4_type));
                         }
                 on_error:
@@ -360,12 +360,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device5_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device5_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device5_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device5_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -376,7 +376,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device5_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device5_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device5_config).current_option().str()), body)) {
                           apply_device5_type_options(id(device5_type));
                         }
                 on_error:
@@ -386,12 +386,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device6_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device6_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device6_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device6_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -402,7 +402,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device6_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device6_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device6_config).current_option().str()), body)) {
                           apply_device6_type_options(id(device6_type));
                         }
                 on_error:
@@ -412,12 +412,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device7_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device7_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device7_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device7_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -428,7 +428,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device7_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device7_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device7_config).current_option().str()), body)) {
                           apply_device7_type_options(id(device7_type));
                         }
                 on_error:
@@ -438,12 +438,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device8_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device8_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device8_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device8_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -454,7 +454,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device8_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device8_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device8_config).current_option().str()), body)) {
                           apply_device8_type_options(id(device8_type));
                         }
                 on_error:
@@ -464,12 +464,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device9_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device9_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device9_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device9_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -480,7 +480,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device9_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device9_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device9_config).current_option().str()), body)) {
                           apply_device9_type_options(id(device9_type));
                         }
                 on_error:
@@ -490,12 +490,12 @@ button:
       - if:
           condition:
             lambda: |-
-              const std::string entity_id = extract_entity_id_from_device1_option(id(device10_config).state);
+              const std::string entity_id = extract_entity_id_from_device1_option(id(device10_config).current_option().str());
               return has_saved_ha_token() && entity_id.rfind("light.", 0) == 0;
           then:
             - http_request.get:
                 url: !lambda |-
-                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device10_config).state));
+                  return build_ha_http_state_url(id(ha_host).state, extract_entity_id_from_device1_option(id(device10_config).current_option().str()));
                 capture_response: true
                 max_response_buffer_size: 64kB
                 request_headers:
@@ -506,7 +506,7 @@ button:
                   then:
                     - lambda: |-
                         if (update_device10_light_config_from_http_response(
-                                extract_entity_id_from_device1_option(id(device10_config).state), body)) {
+                                extract_entity_id_from_device1_option(id(device10_config).current_option().str()), body)) {
                           apply_device10_type_options(id(device10_type));
                         }
                 on_error:
