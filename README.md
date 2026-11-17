@@ -15,30 +15,30 @@ ESPHome firmware project for the ONX2424G013 round knob display. It uses an ESP3
 - Controls Home Assistant switches, lights, plugs, covers, and automations from the display.
 - Supports rotary and push-button input, screen brightness, standby settings, and standby weather.
 - Provides Wi-Fi captive-portal provisioning when no network has been configured.
-- Supports HTTPS manifest-based firmware updates; the current release OTA image is in `firmware/`.
+- Supports HTTPS manifest-based firmware updates. The published OTA image and manifest are in `firmware/`.
 
 The main configuration is [ONX2424G013.yaml](ONX2424G013.yaml). The target hardware uses an ESP32-S3 with 16 MB flash, Octal PSRAM, and a GC9A01A round display; use this firmware only with compatible ONX2424G013 hardware.
 
-## Home Assistant entity list
+## What's new in v1.1.0
+
+Compared with v1.0.1, this version fixes the "Refresh Entity List" hang and crash on Home Assistant instances with many entities, and improves compatibility with recent ESPHome releases:
+
+- Fetches only supported Home Assistant entities through one `render_template` WebSocket subscription, then unsubscribes after the response. Weather entities appear first; the list is limited to 200 entries and the response to 128 KB.
+- Moves entity parsing and select-option updates to the main loop, keeping large responses from blocking the WebSocket task or exhausting memory.
+- Truncates entity names at UTF-8 character boundaries to prevent invalid select options and repeated Home Assistant API disconnections.
+- Applies the ESPHome API large-message batching fix during code generation for both PlatformIO and native ESP-IDF builds.
+- Updates select and IP address calls for ESPHome 2026.8+ compatibility. Builds have been verified with ESPHome 2026.6.3 and 2026.10.1.
+
+## Home Assistant setup
+
+To control entities, enable **"Allow the device to perform Home Assistant actions"** in the device's ESPHome integration options (Settings → Devices & Services → ESPHome → your ONX2424G013 device → Configure). Otherwise, Home Assistant rejects actions such as `light.toggle` and `switch.toggle` even when knob presses appear on the display.
+
+### Entity list
 
 The display does not download the full Home Assistant entity registry. Instead it runs a `render_template` request over the Home Assistant WebSocket API, which returns only the entities the knob can control:
 
 - Domains returned: `switch`, `light`, `cover`, and `automation`; `weather` entities are always included first.
 - At most 200 entities are stored on the device; larger lists are truncated. The device also asks Home Assistant for at most 200 entries (`variables.limit`), so the template stops collecting once the cap is reached.
-- The ESPHome API large-message batching patch is applied automatically during code generation for both the PlatformIO build system (ESPHome ≤ 2026.6.x) and the native build system (ESPHome ≥ 2026.8); no manual step is needed.
-
-## Changes in this fork
-
-Compared to upstream v1.0.1, this fork fixes the "Refresh Entity List" hang and crash on large Home Assistant instances plus several follow-up issues:
-
-- The entity list is fetched with a single `render_template` request over the Home Assistant WebSocket API (the server-side template keeps only the supported domains and always includes `weather` first). Responses are capped at 200 entities / 128 KB, and the `render_template` subscription is always unsubscribed afterwards.
-- Registry parsing, select-option rebuild, config commit, and API-client refresh run in the main loop; the WebSocket task only accumulates bytes and hands the payload over through a mutex-protected pending buffer. Large responses no longer block the UI or exhaust memory.
-- Entity names are truncated on UTF-8 character boundaries (at storage time, when building select options, and when loading persisted entities). Previously a Russian name cut mid-character produced invalid UTF-8, and Home Assistant rejected the whole `ListEntitiesSelectResponse` with `String field had bad UTF-8`, disconnecting and reconnecting in a loop.
-- The ESPHome API large-message batching workaround (needed when a Select carries ~200 options) is applied automatically during code generation, so it works both on the PlatformIO build (ESPHome ≤ 2026.6.x) and on the native CMake/ESP-IDF build (ESPHome ≥ 2026.8), where `extra_scripts` no longer runs.
-- Compatibility with ESPHome 2026.8+ APIs: `Select::current_option()` instead of `Select::state`, `IPAddress::str_to()` instead of `IPAddress::str()`, template-friendly select option vectors.
-- Builds verified with ESPHome 2026.6.3 and 2026.10.1.
-
-Home Assistant requirement: enable **"Allow the device to perform Home Assistant actions"** in the ESPHome integration options for this device (Settings → Devices & Services → ESPHome → *ONX2424G013 c83734* → Configure). With the default `allow_service_calls: false`, knob presses are shown on the display but Home Assistant rejects the `light.toggle` / `switch.toggle` calls.
 
 ## Requirements
 
@@ -123,7 +123,7 @@ esphome run --device /dev/ttyACM0 ONX2424G013.yaml
 For browser flashing, open [ESPHome Web](https://web.esphome.io/) in Chrome or Edge, connect the device, and select a factory firmware file. This method requires a Chromium-based browser with Web Serial support, but does not require a local ESPHome installation.
 
 - **Build from source:** select `.esphome/build/onx2424g013/.pioenvs/onx2424g013/firmware.factory.bin` after compiling the repository.
-- **No local build:** download `onx2424g013.factory_v1.0.1.bin` from the [v1.0.1 release](https://github.com/OpenNextion/OpenNextion-Example-ESPHome_KNOB_Control/releases/tag/v1.0.1), then select that file in ESPHome Web.
+- **No local build:** download the factory image from the [v1.1.0 release](https://github.com/OpenNextion/OpenNextion-Example-ESPHome_KNOB_Control/releases/tag/v1.1.0) and select it in ESPHome Web.
 
 ## User manual
 

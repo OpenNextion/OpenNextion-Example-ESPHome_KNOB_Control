@@ -1,13 +1,13 @@
 {
     "name": "ONX2424G013",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "builds": [{
         "chipFamily": "ESP32-S3",
         "ota": {
-            "path": "onx2424g013.ota_v1.0.1.bin",
-            "md5": "ef5c2437dc4db2deb269623539c83d46",
-            "summary": "Update [how_to_use] url",
-            "release_url": "https://github.com/OpenNextion/OpenNextion-Example-ESPHome_KNOB_Control/releases/tag/v1.0.1"
+            "path": "onx2424g013.ota_v1.1.0.bin",
+            "md5": "c450646c88495e6fe2710230007b5339",
+            "summary": "Fix entity list loading on large Home Assistant instances using render_template; support ESPHome 2026.8+ APIs",
+            "release_url": "https://github.com/OpenNextion/OpenNextion-Example-ESPHome_KNOB_Control/releases/tag/v1.1.0"
         }
     }]
 }

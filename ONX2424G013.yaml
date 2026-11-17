@@ -14,7 +14,7 @@ substitutions:
   lcd_spi_data_rate: 40MHz
   lcd_backlight_default: 100%
   encoder_resolution: "4"
-  product_firmware_version: "1.0.1"
+  product_firmware_version: "1.1.0"
   product_firmware_manifest_url: "https://opennextion.github.io/OpenNextion-Example-ESPHome_KNOB_Control/firmware/manifest.json"
 
 packages:
